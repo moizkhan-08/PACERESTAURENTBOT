@@ -1,0 +1,47 @@
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: pace-redis
+    restart: always
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+
+  waha:
+    image: devlikeappro/waha-plus:latest
+    container_name: pace-waha
+    restart: always
+    ports:
+      - "32768:3000"
+    environment:
+      - WAHA_API_KEY=${WAHA_API_KEY}
+      - WHATSAPP_DEFAULT_ENGINE=NOWEB
+    volumes:
+      - waha-data:/app/.sessions
+
+  pace-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: pace-restaurant-bot
+    restart: always
+    depends_on:
+      - redis
+      - waha
+    env_file:
+      - .env
+    ports:
+      - "7998:7998"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - TZ=Asia/Karachi
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:7998/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  redis-data:
+  waha-data:
