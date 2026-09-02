@@ -9,6 +9,7 @@ services:
       - redis-data:/data
 
   pace-bot:
+    image: pace-restaurant-bot:latest
     build:
       context: https://github.com/moizkhan-08/PACERESTAURENTBOT.git#main
       dockerfile: Dockerfile
