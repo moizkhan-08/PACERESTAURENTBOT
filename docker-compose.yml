@@ -18,7 +18,7 @@ services:
     depends_on:
       - redis
     ports:
-      - "${APP_PORT:-6969}:${APP_PORT:-6969}"
+      - "${APP_PORT:-4433}:${APP_PORT:-4433}"
     environment:
       - PYTHONUNBUFFERED=1
       - TZ=Asia/Karachi
@@ -49,13 +49,13 @@ services:
       - MENU_IMAGE_2=${MENU_IMAGE_2:-https://i.ibb.co/fddn2Myn/m2.jpg}
       - VPS_IP=${VPS_IP:-72.61.151.29}
       - APP_HOST=0.0.0.0
-      - APP_PORT=${APP_PORT:-6969}
-      - DASHBOARD_PORT=${DASHBOARD_PORT:-6996}
+      - APP_PORT=${APP_PORT:-4433}
+      - DASHBOARD_PORT=${DASHBOARD_PORT:-4434}
       - DEBUG=${DEBUG:-false}
       - ORDER_CONFIRM_TIMEOUT_MIN=${ORDER_CONFIRM_TIMEOUT_MIN:-10}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:6969/health')"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4433/health')"]
       interval: 30s
       timeout: 5s
       retries: 3
