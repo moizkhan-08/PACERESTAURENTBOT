@@ -1,19 +1,8 @@
 services:
-  redis:
-    image: redis:7-alpine
-    container_name: pace-redis
-    restart: always
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis-data:/data
-
   pace-bot:
     build: .
     container_name: pace-restaurant-bot
     restart: always
-    depends_on:
-      - redis
     ports:
       - "${APP_PORT:-4433}:${APP_PORT:-4433}"
     environment:
@@ -29,7 +18,7 @@ services:
       - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
       - SUPABASE_TABLE=${SUPABASE_TABLE:-pace_orders}
       - SUPABASE_MENU_TABLE=${SUPABASE_MENU_TABLE:-MenuPace}
-      - REDIS_URL=redis://redis:6379/0
+      - REDIS_URL=${REDIS_URL:-redis://localhost:6379/0}
       - ALLOWED_NUMBERS_ONLY=${ALLOWED_NUMBERS_ONLY:-false}
       - ALLOWED_NUMBERS=${ALLOWED_NUMBERS:-923306874242,923379221111,69630278291529,94043224707153}
       - RESTAURANT_NAME=${RESTAURANT_NAME:-Pace Restaurant}
@@ -56,7 +45,4 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
-
-volumes:
-  redis-data:
 
