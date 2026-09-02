@@ -1,4 +1,5 @@
-name: Deploy to Hostinger VPS
+name: Deploy to Hostinger VPS — Automated SSH Pipeline
+# Triggered deployment after configuring repository secrets
 
 on:
   push:
