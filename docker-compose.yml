@@ -1,6 +1,8 @@
 services:
   pace-bot:
-    build: .
+    build:
+      context: https://github.com/moizkhan-08/PACERESTAURENTBOT.git#main
+      dockerfile: Dockerfile
     container_name: pace-restaurant-bot
     restart: always
     ports:
