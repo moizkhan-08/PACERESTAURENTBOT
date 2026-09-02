@@ -51,7 +51,7 @@ class Settings(BaseSettings):
     MENU_IMAGE_2: str = Field(default="https://i.ibb.co/fddn2Myn/m2.jpg")
 
     # ── App Server ──
-    VPS_IP: str = Field(default="187.127.121.205")
+    VPS_IP: str = Field(default="72.61.151.29")
     APP_HOST: str = Field(default="0.0.0.0")
     APP_PORT: int = Field(default=6969)
     DASHBOARD_PORT: int = Field(default=6996)
