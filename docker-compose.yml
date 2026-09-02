@@ -9,7 +9,7 @@ services:
       - redis-data:/data
 
   waha:
-    image: devlikeappro/waha-plus:latest
+    image: devlikeappro/waha:latest
     container_name: pace-waha
     restart: always
     ports:
