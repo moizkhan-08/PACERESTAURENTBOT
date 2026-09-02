@@ -1,50 +1,11 @@
+version: '3.8'
+
 services:
-  pace-bot:
-    build:
-      context: https://github.com/moizkhan-08/PACERESTAURENTBOT.git#main
-      dockerfile: Dockerfile
+  bot:
+    build: .
     container_name: pace-restaurant-bot
     restart: always
+    env_file:
+      - .env
     ports:
-      - "${APP_PORT:-4433}:${APP_PORT:-4433}"
-    environment:
-      - PYTHONUNBUFFERED=1
-      - TZ=Asia/Karachi
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - WAHA_API_URL=${WAHA_API_URL:-http://187.127.121.205:32768}
-      - WAHA_API_KEY=${WAHA_API_KEY:-Wq5ubJEEnMBEusRuc8WsPM5gwh3kwE0p}
-      - WAHA_SESSION=${WAHA_SESSION:-Pace}
-      - WAHA_WEBHOOK_SECRET=${WAHA_WEBHOOK_SECRET:-pace_webhook_secret_secure_key_2026}
-      - SUPABASE_URL=${SUPABASE_URL:-https://gxpphoctlyuwoucoummy.supabase.co}
-      - SUPABASE_KEY=${SUPABASE_KEY}
-      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
-      - SUPABASE_TABLE=${SUPABASE_TABLE:-pace_orders}
-      - SUPABASE_MENU_TABLE=${SUPABASE_MENU_TABLE:-MenuPace}
-      - REDIS_URL=${REDIS_URL:-redis://localhost:6379/0}
-      - ALLOWED_NUMBERS_ONLY=${ALLOWED_NUMBERS_ONLY:-false}
-      - ALLOWED_NUMBERS=${ALLOWED_NUMBERS:-923306874242,923379221111,69630278291529,94043224707153}
-      - RESTAURANT_NAME=${RESTAURANT_NAME:-Pace Restaurant}
-      - RESTAURANT_CITY=${RESTAURANT_CITY:-Dera Ismail Khan}
-      - RESTAURANT_ADDRESS=${RESTAURANT_ADDRESS:-East Circular Road, Topan Wala Chowk, Dera Ismail Khan}
-      - RESTAURANT_PHONE=${RESTAURANT_PHONE:-0966-710000}
-      - RESTAURANT_MOBILE=${RESTAURANT_MOBILE:-0332-2716555}
-      - ADMIN_WHATSAPP=${ADMIN_WHATSAPP:-923306874242}
-      - ADMIN_2_WHATSAPP=${ADMIN_2_WHATSAPP:-923306874242}
-      - KITCHEN_WHATSAPP=${KITCHEN_WHATSAPP:-923306874242}
-      - ADMIN_GROUP_JID=${ADMIN_GROUP_JID:-120363430258815799@g.us}
-      - MINIMUM_DELIVERY_ORDER=${MINIMUM_DELIVERY_ORDER:-300}
-      - MENU_IMAGE_1=${MENU_IMAGE_1:-https://i.ibb.co/35JBh92c/m1.jpg}
-      - MENU_IMAGE_2=${MENU_IMAGE_2:-https://i.ibb.co/fddn2Myn/m2.jpg}
-      - VPS_IP=${VPS_IP:-72.61.151.29}
-      - APP_HOST=0.0.0.0
-      - APP_PORT=${APP_PORT:-4433}
-      - DASHBOARD_PORT=${DASHBOARD_PORT:-4434}
-      - DEBUG=${DEBUG:-false}
-      - ORDER_CONFIRM_TIMEOUT_MIN=${ORDER_CONFIRM_TIMEOUT_MIN:-10}
-      - LOG_LEVEL=${LOG_LEVEL:-INFO}
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4433/health')"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-
+      - "4433:4433"

@@ -1,30 +1,57 @@
-name: Deploy to Hostinger VPS — Automated SSH Pipeline
-# Triggered deployment after configuring repository secrets
+name: Deploy to VPS
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Deploy over SSH
-        uses: appleboy/ssh-action@v1.0.3
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.2.0
         with:
-          host: ${{ secrets.HOSTINGER_HOST }}
-          username: ${{ secrets.HOSTINGER_USER }}
-          key: ${{ secrets.HOSTINGER_SSH_KEY }}
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          password: ${{ secrets.VPS_PASSWORD }}
+          port: 22
           script: |
-            if [ ! -d "/root/pace_bot/.git" ]; then
+            set -e
+            
+            # Determine home directory based on user
+            if [ "${{ secrets.VPS_USER }}" = "root" ]; then
+              PROJECT_DIR="/root/pace_bot"
+            else
+              PROJECT_DIR="/home/${{ secrets.VPS_USER }}/pace_bot"
+            fi
+            
+            # Fallback: auto-discover directory if standard path doesn't exist
+            if [ ! -d "$PROJECT_DIR" ]; then
+              PROJECT_DIR=$(find /root /home -name pace_bot -type d -maxdepth 2 | head -n 1)
+            fi
+            
+            if [ -z "$PROJECT_DIR" ] || [ ! -d "$PROJECT_DIR" ]; then
+              echo "📂 Creating directory $PROJECT_DIR"
               mkdir -p /root/pace_bot
               git clone https://github.com/moizkhan-08/PACERESTAURENTBOT.git /root/pace_bot
+              PROJECT_DIR="/root/pace_bot"
             fi
-            cd /root/pace_bot
-            git fetch origin main
-            git reset --hard origin/main
-            if [ ! -f ".env" ] && [ -f ".env.example" ]; then
-              cp .env.example .env
-            fi
-            docker compose up -d --build
-            docker image prune -f
+            
+            cd "$PROJECT_DIR"
+            echo "📂 Working in $PROJECT_DIR"
+            
+            # Mark directory as safe for git
+            git config --global --add safe.directory "$PROJECT_DIR"
+            
+            git pull origin main
+            echo "✅ Code pulled"
+            
+            chmod +x deploy.sh
+            ./deploy.sh
+            echo "🚀 Deployed successfully"
