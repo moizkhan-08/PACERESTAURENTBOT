@@ -8,18 +8,6 @@ services:
     volumes:
       - redis-data:/data
 
-  waha:
-    image: devlikeappro/waha:latest
-    container_name: pace-waha
-    restart: always
-    ports:
-      - "32768:3000"
-    environment:
-      - WAHA_API_KEY=${WAHA_API_KEY:-Wq5ubJEEnMBEusRuc8WsPM5gwh3kwE0p}
-      - WHATSAPP_DEFAULT_ENGINE=NOWEB
-    volumes:
-      - waha-data:/app/.sessions
-
   pace-bot:
     build:
       context: https://github.com/moizkhan-08/PACERESTAURENTBOT.git#main
@@ -28,9 +16,6 @@ services:
     restart: always
     depends_on:
       - redis
-      - waha
-    env_file:
-      - .env
     ports:
       - "${APP_PORT:-6969}:${APP_PORT:-6969}"
     environment:
@@ -76,4 +61,4 @@ services:
 
 volumes:
   redis-data:
-  waha-data:
+
