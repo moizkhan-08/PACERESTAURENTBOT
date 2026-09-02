@@ -37,7 +37,7 @@ dedup), and structured logging with a dead-letter path for exhausted retries.
 ```mermaid
 graph TD
     A["📱 Customer WhatsApp"] <-->|Messages, Voice Notes, Media| B["🐳 WAHA Docker (Port 32768)"]
-    B -->|Webhook POST + shared secret| C["⚡ FastAPI Core (Port 7998)"]
+    B -->|Webhook POST + shared secret| C["⚡ FastAPI Core (Port 6969)"]
 
     subgraph Ingestion
         C --> C1{"🔑 Verify webhook secret"}
@@ -114,7 +114,7 @@ MENU_IMAGE_2=${MENU_IMAGE_2}
 
 # ── Server ──
 APP_HOST=0.0.0.0
-APP_PORT=7998
+APP_PORT=6969
 DEBUG=false
 ORDER_CONFIRM_TIMEOUT_MIN=10
 
@@ -236,7 +236,7 @@ curl -X POST "${WAHA_API_URL}/api/sessions/start" \
     "config": {
       "webhooks": [
         {
-          "url": "http://pace-bot:7998/webhook/pace-restaurant",
+          "url": "http://pace-bot:6969/webhook/pace-restaurant",
           "events": ["session.status", "message", "messages.upsert", "message.any"],
           "hmac": { "key": "'"${WAHA_WEBHOOK_SECRET}"'" }
         }
@@ -665,11 +665,11 @@ COPY . .
 RUN chown -R appuser:appuser /app
 USER appuser
 
-EXPOSE 7998
+EXPOSE 6969
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:7998/health')" || exit 1
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:6969/health')" || exit 1
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "7998"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "6969"]
 ```
 
 `.dockerignore`:
@@ -720,12 +720,12 @@ services:
     env_file:
       - .env
     ports:
-      - "7998:7998"
+      - "6969:6969"
     environment:
       - PYTHONUNBUFFERED=1
       - TZ=Asia/Karachi
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:7998/health')"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:6969/health')"]
       interval: 30s
       timeout: 5s
       retries: 3

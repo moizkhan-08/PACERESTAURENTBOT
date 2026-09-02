@@ -53,7 +53,7 @@ class Settings(BaseSettings):
     # ── App Server ──
     VPS_IP: str = Field(default="187.127.121.205")
     APP_HOST: str = Field(default="0.0.0.0")
-    APP_PORT: int = Field(default=7998)
+    APP_PORT: int = Field(default=6969)
     DASHBOARD_PORT: int = Field(default=6996)
     DEBUG: bool = Field(default=False)
     ORDER_CONFIRM_TIMEOUT_MIN: int = Field(default=10)

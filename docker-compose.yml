@@ -32,12 +32,12 @@ services:
     env_file:
       - .env
     ports:
-      - "7998:7998"
+      - "6969:6969"
     environment:
       - PYTHONUNBUFFERED=1
       - TZ=Asia/Karachi
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:7998/health')"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:6969/health')"]
       interval: 30s
       timeout: 5s
       retries: 3
