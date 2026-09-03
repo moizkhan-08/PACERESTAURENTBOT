@@ -283,13 +283,22 @@ async def run_agent_loop(
     latest_order_record = None
     executed_tools = []
 
+    # Deterministic trigger: if customer asks for the menu, guarantee send_menu_images is called
+    user_words = set(user_text.lower().split())
+    menu_triggers = {"menu", "card", "tasweer", "tasweerein", "pic", "pics", "photo", "photos", "menyu"}
+    force_menu = bool(user_words.intersection(menu_triggers)) or any(t in user_text.lower() for t in ["menu dikhao", "menu bhejo", "menu card", "show menu"])
+
     try:
-        for _ in range(5):  # Max 5 tool iterations per turn
+        for turn_idx in range(5):  # Max 5 tool iterations per turn
+            tool_choice = "auto"
+            if turn_idx == 0 and force_menu:
+                tool_choice = {"type": "function", "function": {"name": "send_menu_images"}}
+
             response = await openai_client.chat.completions.create(
                 model=settings.OPENAI_MODEL,
                 messages=messages,
                 tools=AGENT_TOOLS,
-                tool_choice="auto",
+                tool_choice=tool_choice,
                 temperature=0.4
             )
 

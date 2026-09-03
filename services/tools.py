@@ -83,6 +83,7 @@ async def invalidate_menu_cache():
 
 async def send_menu_images(phone: str, session: Optional[str] = None) -> dict:
     """Sends Pace Restaurant menu image cards to customer via the active session."""
+    logger.info("send_menu_images invoked for %s (session: %s)", phone, session)
     try:
         if settings.MENU_IMAGE_1:
             await call_with_retry(
@@ -95,6 +96,7 @@ async def send_menu_images(phone: str, session: Optional[str] = None) -> dict:
                 kind="send_menu_image_1",
                 payload={"phone": phone}
             )
+            logger.info("Page 1 menu image dispatched to %s", phone)
         if settings.MENU_IMAGE_2:
             await call_with_retry(
                 whatsapp.send_image,
@@ -106,6 +108,7 @@ async def send_menu_images(phone: str, session: Optional[str] = None) -> dict:
                 kind="send_menu_image_2",
                 payload={"phone": phone}
             )
+            logger.info("Page 2 menu image dispatched to %s", phone)
         return {"status": "success", "message": "Menu images sent successfully."}
     except Exception as e:
         logger.error("Failed to send menu images to %s: %s", phone, e)
