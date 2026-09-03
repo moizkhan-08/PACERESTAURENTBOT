@@ -15,8 +15,8 @@ class Settings(BaseSettings):
     OPENAI_MODEL: str = Field(default="gpt-4o-mini")
 
     # ── WhatsApp Gateway (WAHA) ──
-    WAHA_API_URL: str = Field(default="http://localhost:32768")
-    WAHA_API_KEY: str = Field(default="")
+    WAHA_API_URL: str = Field(default="http://187.127.121.205:32768")
+    WAHA_API_KEY: str = Field(default="Wq5ubJEEnMBEusRuc8WsPM5gwh3kwE0p")
     WAHA_SESSION: str = Field(default="mine")
     WAHA_WEBHOOK_SECRET: str = Field(default="pace_webhook_secret_default")
 

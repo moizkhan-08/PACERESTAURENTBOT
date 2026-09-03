@@ -381,8 +381,11 @@ async def process_message(payload: dict):
     waha_session = payload.get("session") or settings.WAHA_SESSION
 
     # Mark as seen & show typing indicator
-    await whatsapp.send_seen(sender_jid, msg_id, session=waha_session)
-    await whatsapp.start_typing(sender_jid, session=waha_session)
+    try:
+        await whatsapp.send_seen(sender_jid, msg_id, session=waha_session)
+        await whatsapp.start_typing(sender_jid, session=waha_session)
+    except Exception as e:
+        logger.warning("Could not set typing/seen for %s: %s", sender_jid, e)
 
     # 1. Handle Voice Note
     if has_media or media_info:
@@ -395,7 +398,10 @@ async def process_message(payload: dict):
                 user_text = "[Voice Note received but could not be transcribed]"
 
     if not user_text:
-        await whatsapp.stop_typing(sender_jid, session=waha_session)
+        try:
+            await whatsapp.stop_typing(sender_jid, session=waha_session)
+        except Exception:
+            pass
         return
 
     # 2. Retrieve session state & history
@@ -431,9 +437,17 @@ async def process_message(payload: dict):
     )
 
     # 5. Send reply via WhatsApp
-    await whatsapp.stop_typing(sender_jid, session=waha_session)
+    try:
+        await whatsapp.stop_typing(sender_jid, session=waha_session)
+    except Exception:
+        pass
+
     if final_reply:
-        await whatsapp.send_text(sender_jid, final_reply, session=waha_session)
+        try:
+            await whatsapp.send_text(sender_jid, final_reply, session=waha_session)
+            logger.info("Outbound WhatsApp reply dispatched to %s via session %s", sender_jid, waha_session)
+        except Exception as e:
+            logger.error("Failed to dispatch WhatsApp reply to %s: %s", sender_jid, e)
 
     # 6. Update session history in Redis
     history = session.get("history", [])
