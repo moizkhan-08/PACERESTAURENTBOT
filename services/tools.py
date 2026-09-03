@@ -192,7 +192,7 @@ async def check_returning_customer(phone: str) -> dict:
     if profile:
         return {
             "is_returning": True,
-            "name": profile.get("customer_name"),
+            "name": profile.get("name") or profile.get("customer_name", ""),
             "default_address": profile.get("default_address"),
             "total_orders": profile.get("total_orders", 0),
             "last_order_items": profile.get("last_order_items")

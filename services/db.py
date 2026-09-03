@@ -1,9 +1,11 @@
 import logging
 import json
+import asyncio
 from datetime import datetime, timezone
 from typing import Optional, Any
 import httpx
 from config import settings
+from services.cache import redis_client
 
 logger = logging.getLogger("db")
 
@@ -66,46 +68,61 @@ class SupabaseDB:
         return []
 
     async def get_customer_profile(self, phone: str) -> Optional[dict]:
-        """Fetch past customer history for personalized greetings."""
+        """Fetch past customer history from Supabase customers table for personalized greetings."""
         try:
+            clean_phone = phone.replace("+", "").strip()
+            local_phone = "0" + clean_phone[2:] if clean_phone.startswith("92") else clean_phone
+            intl_phone = "92" + clean_phone[1:] if clean_phone.startswith("0") else clean_phone
+
             async with self._get_client() as client:
                 res = await client.get(
-                    "/customer_profiles",
-                    params={"phone_number": f"eq.{phone}", "select": "*"}
+                    "/customers",
+                    params={
+                        "or": f"(phone.eq.{clean_phone},phone.eq.{local_phone},phone.eq.{intl_phone})",
+                        "select": "*",
+                        "limit": "1"
+                    }
                 )
                 if res.status_code == 200:
                     rows = res.json()
-                    return rows[0] if rows else None
+                    if rows:
+                        c = rows[0]
+                        return {
+                            "phone": c.get("phone"),
+                            "name": c.get("name"),
+                            "default_address": c.get("address"),
+                            "total_orders": 1,
+                            "is_returning": True
+                        }
         except Exception as e:
-            logger.warning("Error fetching customer profile for %s: %s", phone, e)
+            logger.warning("Error fetching customer profile: %s", e)
         return None
 
-    async def upsert_customer_profile(
-        self,
-        phone: str,
-        name: str,
-        address: Optional[str] = None,
-        last_order_items: Optional[str] = None
-    ) -> bool:
-        """Update or insert customer profile after a confirmed order."""
+    async def upsert_customer_profile(self, phone: str, name: str, address: str = "", last_items: str = "") -> bool:
+        """Upsert returning customer data into Supabase customers table."""
         try:
+            import uuid
             existing = await self.get_customer_profile(phone)
-            total_orders = (existing.get("total_orders", 0) + 1) if existing else 1
-            default_address = address or (existing.get("default_address") if existing else None)
+            clean_phone = phone.replace("+", "").strip()
+            local_phone = "0" + clean_phone[2:] if clean_phone.startswith("92") else clean_phone
 
             payload = {
-                "phone_number": phone,
-                "customer_name": name,
-                "default_address": default_address,
-                "total_orders": total_orders,
-                "last_order_items": last_order_items,
-                "last_ordered_at": datetime.now(timezone.utc).isoformat()
+                "name": name,
+                "phone": local_phone or clean_phone,
+                "address": address or ""
             }
 
-            headers = {**self.headers, "Prefer": "resolution=merge-duplicates,return=representation"}
-            async with httpx.AsyncClient(base_url=f"{self.base_url}/rest/v1", headers=headers, timeout=10.0) as client:
-                res = await client.post("/customer_profiles", json=payload)
-                return res.status_code in (200, 201)
+            async with self._get_client() as client:
+                if existing and existing.get("phone"):
+                    res = await client.patch(
+                        "/customers",
+                        params={"phone": f"eq.{existing['phone']}"},
+                        json=payload
+                    )
+                else:
+                    payload["id"] = f"c_{uuid.uuid4().hex[:10]}"
+                    res = await client.post("/customers", json=payload)
+                return res.status_code in (200, 201, 204)
         except Exception as e:
             logger.warning("Error upserting customer profile: %s", e)
             return False
@@ -113,7 +130,8 @@ class SupabaseDB:
     async def save_order(self, order_data: dict) -> dict:
         """
         Idempotent order persistence into pace_orders.
-        Correctly maps fields to Supabase pace_orders table columns.
+        Uses Redis lock for immediate duplicate prevention,
+        and saves mapped fields to the live Supabase pace_orders table.
         """
         import uuid
         import pytz
@@ -121,17 +139,31 @@ class SupabaseDB:
         now_pkt = datetime.now(PKT)
 
         confirm_key = order_data.get("session_confirm_key")
+        lock_key = f"order_idempotency:{confirm_key}" if confirm_key else None
+
+        # 1. Idempotency Check via Redis
+        if lock_key:
+            try:
+                existing_order_json = await redis_client.get(lock_key)
+                if existing_order_json:
+                    cached = json.loads(existing_order_json)
+                    logger.info("Duplicate order prevented for confirm_key %s: %s", confirm_key, cached.get("order_id"))
+                    return {"order_id": cached.get("order_id"), "duplicate": True, "data": cached.get("data", order_data)}
+            except Exception as lock_err:
+                logger.debug("Idempotency cache check notice: %s", lock_err)
+
         order_id = f"PACE-{now_pkt.strftime('%Y%m%d')}-{uuid.uuid4().hex[:6].upper()}"
 
         try:
-            # Prepare payload mapped to exact Supabase pace_orders schema
             subtotal_val = order_data.get("subtotal") or order_data.get("total_bill") or 0
             total_val = order_data.get("total_bill") or 0
+            phone_raw = str(order_data.get("phone_number", ""))
+            clean_phone = phone_raw.replace("+", "").strip()
 
             payload = {
                 "order_id": order_id,
                 "guest_name": order_data.get("customer_name", "Valued Customer"),
-                "phone": str(order_data.get("phone_number", "")),
+                "phone": clean_phone,
                 "order_type": order_data.get("order_type", "Delivery"),
                 "delivery": order_data.get("delivery_address") or "",
                 "dine_pickup_time": order_data.get("pickup_time") or "",
@@ -150,6 +182,23 @@ class SupabaseDB:
                 if res.status_code in (200, 201):
                     rows = res.json()
                     created = rows[0] if rows else payload
+                    
+                    # Store idempotency lock in Redis for 15 minutes
+                    if lock_key:
+                        try:
+                            await redis_client.set(lock_key, json.dumps({"order_id": order_id, "data": created}), ex=900)
+                        except Exception:
+                            pass
+
+                    # Asynchronously save customer profile to customers table
+                    try:
+                        customer_name = order_data.get("customer_name")
+                        address = order_data.get("delivery_address", "")
+                        if customer_name and clean_phone:
+                            asyncio.create_task(self.upsert_customer_profile(clean_phone, customer_name, address))
+                    except Exception as prof_err:
+                        logger.warning("Could not trigger customer profile upsert: %s", prof_err)
+
                     return {"order_id": order_id, "duplicate": False, "data": created}
                 
                 logger.error("Failed to insert order: %d %s", res.status_code, res.text)
