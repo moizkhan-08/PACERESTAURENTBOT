@@ -81,37 +81,37 @@ async def invalidate_menu_cache():
     await redis_client.delete("cache:menu_items")
 
 
-async def send_menu_images(phone: str, session: Optional[str] = None) -> dict:
+async def send_menu_images(target: str, session: Optional[str] = None) -> dict:
     """Sends Pace Restaurant menu image cards to customer via the active session."""
-    logger.info("send_menu_images invoked for %s (session: %s)", phone, session)
+    logger.info("send_menu_images invoked for %s (session: %s)", target, session)
     try:
         if settings.MENU_IMAGE_1:
             await call_with_retry(
                 whatsapp.send_image,
-                phone,
+                target,
                 settings.MENU_IMAGE_1,
                 caption="📖 Pace Restaurant Menu — Page 1",
                 session=session,
                 timeout=35.0,
                 kind="send_menu_image_1",
-                payload={"phone": phone}
+                payload={"target": target}
             )
-            logger.info("Page 1 menu image dispatched to %s", phone)
+            logger.info("Page 1 menu image dispatched to %s", target)
         if settings.MENU_IMAGE_2:
             await call_with_retry(
                 whatsapp.send_image,
-                phone,
+                target,
                 settings.MENU_IMAGE_2,
                 caption="📖 Pace Restaurant Menu — Page 2",
                 session=session,
                 timeout=35.0,
                 kind="send_menu_image_2",
-                payload={"phone": phone}
+                payload={"target": target}
             )
-            logger.info("Page 2 menu image dispatched to %s", phone)
+            logger.info("Page 2 menu image dispatched to %s", target)
         return {"status": "success", "message": "Menu images sent successfully."}
     except Exception as e:
-        logger.error("Failed to send menu images to %s: %s", phone, e)
+        logger.error("Failed to send menu images to %s: %s", target, e)
         return {"status": "error", "message": str(e)}
 
 

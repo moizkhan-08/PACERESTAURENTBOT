@@ -154,7 +154,8 @@ async def execute_tool_call(
     phone: str,
     dispatch_mode: str = "whatsapp",
     latest_order_record: Optional[dict] = None,
-    waha_session: Optional[str] = None
+    waha_session: Optional[str] = None,
+    sender_jid: Optional[str] = None
 ) -> tuple[dict, Optional[dict]]:
     """
     Executes a single tool call and returns (tool_result, updated_latest_order_record).
@@ -170,8 +171,9 @@ async def execute_tool_call(
         tool_result = await read_menu(category)
 
     elif tool_name == "send_menu_images":
+        target = sender_jid or phone
         if dispatch_mode == "whatsapp":
-            tool_result = await send_menu_images(phone, session=waha_session)
+            tool_result = await send_menu_images(target, session=waha_session)
         else:
             tool_result = {
                 "status": "success",
@@ -252,7 +254,8 @@ async def run_agent_loop(
     system_prompt: str,
     hours: dict,
     dispatch_mode: str = "whatsapp",
-    waha_session: Optional[str] = None
+    waha_session: Optional[str] = None,
+    sender_jid: Optional[str] = None
 ) -> tuple[str, list[dict]]:
     """
     Core OpenAI tool-calling execution loop. Shared between WhatsApp and Web Simulator.
@@ -323,7 +326,8 @@ async def run_agent_loop(
                     phone=phone,
                     dispatch_mode=dispatch_mode,
                     latest_order_record=latest_order_record,
-                    waha_session=waha_session
+                    waha_session=waha_session,
+                    sender_jid=sender_jid
                 )
 
                 executed_tools.append({
@@ -358,7 +362,10 @@ async def process_message(payload: dict):
     """
     msg_payload = payload.get("payload", {})
     sender_jid = msg_payload.get("from", "")
-    phone = sender_jid.split("@")[0]
+    # Check if there is an alternate real phone JID in remoteJidAlt (common for WhatsApp Linked Devices)
+    remote_jid_alt = msg_payload.get("_data", {}).get("key", {}).get("remoteJidAlt", "")
+    real_phone_jid = remote_jid_alt or sender_jid
+    phone = real_phone_jid.split("@")[0]
     msg_id = msg_payload.get("id")
     has_media = msg_payload.get("hasMedia", False)
     media_info = msg_payload.get("media", {})
@@ -446,7 +453,8 @@ async def process_message(payload: dict):
         system_prompt=system_prompt,
         hours=hours,
         dispatch_mode="whatsapp",
-        waha_session=waha_session
+        waha_session=waha_session,
+        sender_jid=sender_jid
     )
 
     # 5. Send reply via WhatsApp
