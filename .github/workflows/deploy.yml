@@ -24,23 +24,13 @@ jobs:
           script: |
             set -e
             
-            # Determine home directory based on user
-            if [ "${{ secrets.VPS_USER }}" = "root" ]; then
-              PROJECT_DIR="/root/pace_bot"
-            else
-              PROJECT_DIR="/home/${{ secrets.VPS_USER }}/pace_bot"
-            fi
+            # Hostinger Docker Manager tracks projects inside /docker/
+            PROJECT_DIR="/docker/pace_bot"
             
-            # Fallback: auto-discover directory if standard path doesn't exist
             if [ ! -d "$PROJECT_DIR" ]; then
-              PROJECT_DIR=$(find /root /home -name pace_bot -type d -maxdepth 2 | head -n 1)
-            fi
-            
-            if [ -z "$PROJECT_DIR" ] || [ ! -d "$PROJECT_DIR" ]; then
-              echo "📂 Creating directory $PROJECT_DIR"
-              mkdir -p /root/pace_bot
-              git clone https://github.com/moizkhan-08/PACERESTAURENTBOT.git /root/pace_bot
-              PROJECT_DIR="/root/pace_bot"
+              echo "📂 Creating directory $PROJECT_DIR for Hostinger Docker Manager"
+              mkdir -p /docker/pace_bot
+              git clone https://github.com/moizkhan-08/PACERESTAURENTBOT.git /docker/pace_bot
             fi
             
             cd "$PROJECT_DIR"
