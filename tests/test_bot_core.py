@@ -78,12 +78,16 @@ def test_hours_routing():
 
 
 def test_calculator_math():
+    import asyncio
     items = [
         {"name": "Full Chicken Sobat", "quantity": 1, "price": 1200.0, "variant": "Thal"},
         {"name": "Mineral Water Large", "quantity": 2, "price": 120.0, "variant": "1.5L"}
     ]
     # Delivery with Thal deposit (1 thal = Rs. 200 deposit)
-    calc = calculate_bill(items, order_type="Delivery", thal_count=1)
+    # calculate_bill is now async (validates prices against menu cache)
+    calc = asyncio.get_event_loop().run_until_complete(
+        calculate_bill(items, order_type="Delivery", thal_count=1)
+    )
     assert calc["subtotal"] == 1440.0
     assert calc["thal_deposit"] == 200.0
     assert calc["total_bill"] == 1640.0
@@ -91,7 +95,9 @@ def test_calculator_math():
 
     # Below minimum delivery check
     small_items = [{"name": "Roti", "quantity": 2, "price": 40.0}]
-    calc_small = calculate_bill(small_items, order_type="Delivery")
+    calc_small = asyncio.get_event_loop().run_until_complete(
+        calculate_bill(small_items, order_type="Delivery")
+    )
     assert calc_small["subtotal"] == 80.0
     assert calc_small["meets_minimum_delivery"] is False  # Min is 300
     print("[PASS] test_calculator_math passed")

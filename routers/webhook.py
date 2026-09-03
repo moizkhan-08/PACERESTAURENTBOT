@@ -17,10 +17,9 @@ def verify_signature(raw_body: bytes, signature: str) -> bool:
     if not settings.WAHA_WEBHOOK_SECRET:
         return True
     if not signature:
-        # In case WAHA passes without signature during local tests or dev
-        if settings.DEBUG:
-            return True
-        return False
+        # WAHA is not configured with HMAC signing — allow but warn
+        logger.debug("Webhook received without HMAC signature. Consider configuring HMAC in WAHA.")
+        return True
         
     expected = hmac.new(
         settings.WAHA_WEBHOOK_SECRET.encode(),
@@ -32,9 +31,15 @@ def verify_signature(raw_body: bytes, signature: str) -> bool:
 
 @router.post("/pace-restaurant")
 async def incoming_waha_webhook(req: Request, background_tasks: BackgroundTasks):
-    """WAHA webhook disabled — accepting messages only via Web Chatbot interface."""
-    logger.info("WAHA webhook event received but ignored (Web Chatbot testing mode active).")
-    return {"status": "waha_disabled_web_testing_mode_active"}
+    """
+    WAHA webhook endpoint for incoming WhatsApp messages.
+    Controlled by WAHA_ENABLED feature flag in settings.
+    """
+    # Feature flag: disable webhook processing when in Web Chatbot testing mode
+    if not settings.WAHA_ENABLED:
+        logger.info("WAHA webhook event received but ignored (WAHA_ENABLED=false).")
+        return {"status": "waha_disabled"}
+
     raw_body = await req.body()
     signature = (
         req.headers.get("X-Webhook-Hmac")
@@ -90,3 +95,4 @@ async def incoming_waha_webhook(req: Request, background_tasks: BackgroundTasks)
     # 4. Asynchronous Task Dispatch
     background_tasks.add_task(process_message, payload)
     return {"status": "queued", "msg_id": msg_id}
+

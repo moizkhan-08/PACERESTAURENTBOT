@@ -1,11 +1,30 @@
-version: '3.8'
-
 services:
+  redis:
+    image: redis:7-alpine
+    container_name: pace-redis
+    restart: always
+    volumes:
+      - redis-data:/data
+
   bot:
     build: .
     container_name: pace-restaurant-bot
     restart: always
+    depends_on:
+      - redis
     env_file:
       - .env
     ports:
       - "4433:4433"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - TZ=Asia/Karachi
+      - REDIS_URL=redis://pace-redis:6379/0
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4433/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  redis-data:

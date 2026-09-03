@@ -107,32 +107,54 @@ async def send_menu_images(phone: str) -> dict:
         return {"status": "error", "message": str(e)}
 
 
-def calculate_bill(
+async def calculate_bill(
     items: list[dict],
     order_type: str = "Delivery",
     thal_count: int = 0
 ) -> dict:
     """
     Deterministic mathematical calculation of subtotal, delivery requirement, and total bill.
+    Cross-references item prices against the live menu to prevent LLM price hallucination.
     Guarantees the LLM never fabricates prices or does arithmetic hallucination.
     """
+    # Fetch cached menu for price validation
+    menu_items = await read_menu()
+    menu_lookup = {}
+    for mi in menu_items:
+        key = mi.get("name", "").strip().lower()
+        if key:
+            menu_lookup[key] = float(mi.get("price", 0.0))
+
     subtotal = 0.0
     parsed_items = []
 
     for item in items:
         name = sanitize_free_text(item.get("name", "Item"))
         qty = int(item.get("quantity") or item.get("qty") or 1)
-        price = float(item.get("price", 0.0))
+        llm_price = float(item.get("price", 0.0))
         variant = sanitize_free_text(item.get("variant", ""))
         notes = sanitize_free_text(item.get("notes", ""))
+
+        # Validate price against menu — use DB price if found, warn if mismatch
+        menu_key = name.strip().lower()
+        verified_price = llm_price
+        if menu_key in menu_lookup:
+            verified_price = menu_lookup[menu_key]
+            if llm_price != verified_price:
+                logger.warning(
+                    "Price mismatch for '%s': LLM said Rs.%.0f, menu says Rs.%.0f. Using menu price.",
+                    name, llm_price, verified_price
+                )
+        else:
+            logger.warning("Item '%s' not found in menu cache — using LLM-provided price Rs.%.0f", name, llm_price)
         
-        line_total = price * qty
+        line_total = verified_price * qty
         subtotal += line_total
 
         parsed_items.append({
             "name": name,
             "quantity": qty,
-            "price": price,
+            "price": verified_price,
             "variant": variant,
             "line_total": line_total,
             "notes": notes
@@ -205,16 +227,19 @@ async def save_order_record(session: dict, items: list[dict], total_bill: float,
     order_id = result.get("order_id", "PACE-ORDER")
     is_duplicate = result.get("duplicate", False)
 
-    # Upsert customer profile if not a duplicate
+    # Upsert customer profile if not a duplicate (with error handling)
     if not is_duplicate and phone:
-        asyncio.create_task(
-            db.upsert_customer_profile(
-                phone=phone,
-                name=customer_name,
-                address=address,
-                last_order_items=items_summary_str
-            )
-        )
+        async def _safe_upsert():
+            try:
+                await db.upsert_customer_profile(
+                    phone=phone,
+                    name=customer_name,
+                    address=address,
+                    last_order_items=items_summary_str
+                )
+            except Exception as e:
+                logger.error("Background customer profile upsert failed for %s: %s", phone, e)
+        asyncio.create_task(_safe_upsert())
 
     return {
         "order_id": order_id,

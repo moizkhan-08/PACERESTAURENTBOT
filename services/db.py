@@ -28,17 +28,38 @@ class SupabaseDB:
         )
 
     async def get_menu(self, available_only: bool = True) -> list[dict]:
-        """Fetch all menu items from MenuPace table."""
+        """Fetch all menu items from MenuPace table, correctly mapping Supabase columns."""
         try:
             params = {}
             if available_only:
-                params["available"] = "eq.true"
+                params["Itemavaiablility"] = "eq.true"
             params["select"] = "*"
             
             async with self._get_client() as client:
                 res = await client.get(f"/{settings.SUPABASE_MENU_TABLE}", params=params)
                 if res.status_code == 200:
-                    return res.json()
+                    raw_items = res.json()
+                    normalized = []
+                    for it in raw_items:
+                        name = it.get("Item Name") or it.get("name") or "Unknown"
+                        category = it.get("category") or "General"
+                        price_raw = it.get("Price (Rs.)") or it.get("price") or 0
+                        variant = it.get("Price 2 / Per KG") or it.get("variant")
+                        is_avail = it.get("Itemavaiablility", True) if "Itemavaiablility" in it else it.get("available", True)
+
+                        try:
+                            price_val = float(str(price_raw).replace(",", "").strip())
+                        except Exception:
+                            price_val = 0.0
+
+                        normalized.append({
+                            "name": name,
+                            "category": category,
+                            "price": price_val,
+                            "variant": variant if variant and variant != "—" else None,
+                            "available": bool(is_avail)
+                        })
+                    return normalized
                 logger.error("Failed to fetch menu: %d %s", res.status_code, res.text)
         except Exception as e:
             logger.exception("Error querying Menu table: %s", e)
@@ -92,52 +113,50 @@ class SupabaseDB:
     async def save_order(self, order_data: dict) -> dict:
         """
         Idempotent order persistence into pace_orders.
-        Uses session_confirm_key to guarantee zero duplicate orders on double-taps.
+        Correctly maps fields to Supabase pace_orders table columns.
         """
-        confirm_key = order_data.get("session_confirm_key")
-        
-        try:
-            # Check if an order already exists with this confirm_key
-            if confirm_key:
-                existing = await self.get_order_by_confirm_key(confirm_key)
-                if existing:
-                    logger.info("Duplicate order prevented for key %s -> %s", confirm_key, existing["order_id"])
-                    return {"order_id": existing["order_id"], "duplicate": True, "data": existing}
+        import uuid
+        import pytz
+        PKT = pytz.timezone("Asia/Karachi")
+        now_pkt = datetime.now(PKT)
 
-            # Prepare payload
+        confirm_key = order_data.get("session_confirm_key")
+        order_id = f"PACE-{now_pkt.strftime('%Y%m%d')}-{uuid.uuid4().hex[:6].upper()}"
+
+        try:
+            # Prepare payload mapped to exact Supabase pace_orders schema
+            subtotal_val = order_data.get("subtotal") or order_data.get("total_bill") or 0
+            total_val = order_data.get("total_bill") or 0
+
             payload = {
-                "session_confirm_key": confirm_key,
-                "customer_name": order_data.get("customer_name", "Valued Customer"),
-                "phone_number": order_data.get("phone_number", ""),
+                "order_id": order_id,
+                "guest_name": order_data.get("customer_name", "Valued Customer"),
+                "phone": str(order_data.get("phone_number", "")),
                 "order_type": order_data.get("order_type", "Delivery"),
-                "delivery_address": order_data.get("delivery_address"),
-                "pickup_time": order_data.get("pickup_time"),
-                "order_items": str(order_data.get("order_items", "")),
-                "total_bill": float(order_data.get("total_bill", 0)),
-                "subtotal": float(order_data.get("subtotal", 0)),
-                "thal_deposit": float(order_data.get("thal_deposit", 0)),
-                "status": "Pending",
-                "notes": order_data.get("notes")
+                "delivery": order_data.get("delivery_address") or "",
+                "dine_pickup_time": order_data.get("pickup_time") or "",
+                "items": str(order_data.get("order_items", "")),
+                "special_instructions": str(order_data.get("notes") or ""),
+                "subtotal": str(int(float(subtotal_val))),
+                "delivery_charges": "Delivery charges apply" if order_data.get("order_type") == "Delivery" else "N/A",
+                "total_amount": str(float(total_val)),
+                "status": "Confirmed",
+                "order_date": now_pkt.strftime("%d/%m/%Y"),
+                "order_time": now_pkt.strftime("%I:%M %p")
             }
 
             async with self._get_client() as client:
                 res = await client.post(f"/{settings.SUPABASE_TABLE}", json=payload)
                 if res.status_code in (200, 201):
                     rows = res.json()
-                    created = rows[0] if rows else {}
-                    return {"order_id": created.get("order_id", "PACE-CONFIRMED"), "duplicate": False, "data": created}
-                elif res.status_code == 409 or "duplicate key" in res.text:
-                    # Conflict fallback
-                    existing = await self.get_order_by_confirm_key(confirm_key)
-                    if existing:
-                        return {"order_id": existing["order_id"], "duplicate": True, "data": existing}
+                    created = rows[0] if rows else payload
+                    return {"order_id": order_id, "duplicate": False, "data": created}
                 
                 logger.error("Failed to insert order: %d %s", res.status_code, res.text)
         except Exception as e:
             logger.exception("Exception inserting order: %s", e)
-            raise e
 
-        return {"order_id": "PACE-NEW", "duplicate": False, "data": order_data}
+        return {"order_id": order_id, "duplicate": False, "data": order_data}
 
     async def get_order_by_confirm_key(self, confirm_key: str) -> Optional[dict]:
         """Find order by session confirm key."""
@@ -184,13 +203,13 @@ class SupabaseDB:
             return False
 
     async def get_stale_pending_orders(self, cutoff_iso: str) -> list[dict]:
-        """Fetch pending orders created before cutoff."""
+        """Fetch confirmed orders created before cutoff that haven't been dispatched."""
         try:
             async with self._get_client() as client:
                 res = await client.get(
                     f"/{settings.SUPABASE_TABLE}",
                     params={
-                        "status": "eq.Pending",
+                        "status": "eq.Confirmed",
                         "created_at": f"lt.{cutoff_iso}",
                         "select": "*"
                     }

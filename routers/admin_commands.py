@@ -65,7 +65,7 @@ async def handle_admin_command(sender_jid: str, text: str) -> bool:
             await redis_client.delete(f"mute:{target_phone}")
             response_msg = f"🔊 Customer {target_phone} unmuted."
 
-    elif command == "/maintenance" and args:
+    elif command == "maintenance" and args:
         mode = args[0].lower()
         if mode == "on":
             await redis_client.set("flag:maintenance_only", clean_sender)
@@ -76,7 +76,7 @@ async def handle_admin_command(sender_jid: str, text: str) -> bool:
         else:
             return False
 
-    elif command == "/status":
+    elif command == "status":
         bot_active = await redis_client.get("flag:bot_active") != "0"
         maint = await redis_client.get("flag:maintenance_only")
         mutes = await redis_client.keys("mute:*")

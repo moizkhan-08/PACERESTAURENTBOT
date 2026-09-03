@@ -1,4 +1,5 @@
 import logging
+import time
 import asyncio
 from typing import Optional, Any
 
@@ -17,9 +18,9 @@ class RedisClientWrapper:
     """Async Redis wrapper with resilient fallback for local tests."""
     def __init__(self):
         self._redis: Optional[Any] = None
-        self._fallback_store: dict = {}
+        self._fallback_store: dict = {}  # key -> (value, expiry_timestamp | None)
         self._is_connected: bool = False
-
+    
     async def init(self):
         if aioredis is None:
             self._is_connected = False
@@ -45,13 +46,33 @@ class RedisClientWrapper:
         if self._redis:
             await self._redis.close()
 
+    def _fallback_get(self, key: str) -> Optional[str]:
+        """Get from fallback store, respecting TTL expiration."""
+        entry = self._fallback_store.get(key)
+        if entry is None:
+            return None
+        value, expiry = entry
+        if expiry is not None and time.monotonic() > expiry:
+            del self._fallback_store[key]
+            return None
+        return value
+
+    def _fallback_set(self, key: str, value: Any, ex: Optional[int] = None, nx: bool = False) -> bool:
+        """Set in fallback store with optional TTL and NX semantics."""
+        existing = self._fallback_get(key)
+        if nx and existing is not None:
+            return False
+        expiry = (time.monotonic() + ex) if ex else None
+        self._fallback_store[key] = (str(value), expiry)
+        return True
+
     async def get(self, key: str) -> Optional[str]:
         if self._is_connected and self._redis:
             try:
                 return await self._redis.get(key)
             except Exception as e:
                 logger.warning("Redis GET failed for %s, using fallback: %s", key, e)
-        return self._fallback_store.get(key)
+        return self._fallback_get(key)
 
     async def set(self, key: str, value: Any, ex: Optional[int] = None, nx: bool = False) -> bool:
         if self._is_connected and self._redis:
@@ -61,10 +82,7 @@ class RedisClientWrapper:
             except Exception as e:
                 logger.warning("Redis SET failed for %s, using fallback: %s", key, e)
         
-        if nx and key in self._fallback_store:
-            return False
-        self._fallback_store[key] = str(value)
-        return True
+        return self._fallback_set(key, value, ex=ex, nx=nx)
 
     async def delete(self, key: str) -> int:
         if self._is_connected and self._redis:
@@ -83,7 +101,7 @@ class RedisClientWrapper:
                 return bool(await self._redis.exists(key))
             except Exception as e:
                 logger.warning("Redis EXISTS failed for %s, using fallback: %s", key, e)
-        return key in self._fallback_store
+        return self._fallback_get(key) is not None
 
     async def keys(self, pattern: str = "*") -> list[str]:
         if self._is_connected and self._redis:
@@ -92,7 +110,18 @@ class RedisClientWrapper:
             except Exception as e:
                 logger.warning("Redis KEYS failed for %s, using fallback: %s", pattern, e)
         import fnmatch
-        return [k for k in self._fallback_store.keys() if fnmatch.fnmatch(k, pattern)]
+        # Clean expired keys during scan
+        now = time.monotonic()
+        valid_keys = []
+        expired_keys = []
+        for k, (v, expiry) in self._fallback_store.items():
+            if expiry is not None and now > expiry:
+                expired_keys.append(k)
+            elif fnmatch.fnmatch(k, pattern):
+                valid_keys.append(k)
+        for k in expired_keys:
+            del self._fallback_store[k]
+        return valid_keys
 
 
 redis_client = RedisClientWrapper()

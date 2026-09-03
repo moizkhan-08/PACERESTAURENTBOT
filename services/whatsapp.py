@@ -27,6 +27,23 @@ class WahaClient:
             "X-Api-Key": settings.WAHA_API_KEY,
             "Content-Type": "application/json"
         }
+        # Persistent HTTP client for connection pooling
+        self._client: Optional[httpx.AsyncClient] = None
+
+    def _get_client(self) -> httpx.AsyncClient:
+        """Returns or creates a persistent httpx.AsyncClient with connection pooling."""
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.AsyncClient(
+                base_url=self.base_url,
+                headers=self.headers,
+                timeout=15.0
+            )
+        return self._client
+
+    async def close(self):
+        """Closes the persistent HTTP client."""
+        if self._client and not self._client.is_closed:
+            await self._client.close()
 
     async def send_text(self, to: str, text: str) -> dict:
         """Sends a text message via WAHA /api/sendText."""
@@ -37,13 +54,13 @@ class WahaClient:
             "text": text
         }
         
-        async with httpx.AsyncClient(base_url=self.base_url, headers=self.headers, timeout=15.0) as client:
-            res = await client.post("/api/sendText", json=payload)
-            if res.status_code in (200, 201):
-                return res.json()
-            logger.error("WAHA sendText failed to %s: %d %s", chat_id, res.status_code, res.text)
-            res.raise_for_status()
-            return {}
+        client = self._get_client()
+        res = await client.post("/api/sendText", json=payload)
+        if res.status_code in (200, 201):
+            return res.json()
+        logger.error("WAHA sendText failed to %s: %d %s", chat_id, res.status_code, res.text)
+        res.raise_for_status()
+        return {}
 
     async def send_image(self, to: str, image_url: str, caption: str = "") -> dict:
         """Sends an image with caption via WAHA /api/sendImage."""
@@ -57,13 +74,13 @@ class WahaClient:
             "caption": caption
         }
 
-        async with httpx.AsyncClient(base_url=self.base_url, headers=self.headers, timeout=20.0) as client:
-            res = await client.post("/api/sendImage", json=payload)
-            if res.status_code in (200, 201):
-                return res.json()
-            logger.error("WAHA sendImage failed to %s: %d %s", chat_id, res.status_code, res.text)
-            res.raise_for_status()
-            return {}
+        client = self._get_client()
+        res = await client.post("/api/sendImage", json=payload, timeout=20.0)
+        if res.status_code in (200, 201):
+            return res.json()
+        logger.error("WAHA sendImage failed to %s: %d %s", chat_id, res.status_code, res.text)
+        res.raise_for_status()
+        return {}
 
     async def send_seen(self, chat_id: str, message_id: Optional[str] = None):
         """Marks message as seen."""
@@ -75,8 +92,8 @@ class WahaClient:
             if message_id:
                 payload["messageId"] = message_id
 
-            async with httpx.AsyncClient(base_url=self.base_url, headers=self.headers, timeout=5.0) as client:
-                await client.post("/api/sendSeen", json=payload)
+            client = self._get_client()
+            await client.post("/api/sendSeen", json=payload, timeout=5.0)
         except Exception as e:
             logger.debug("WAHA sendSeen notice: %s", e)
 
@@ -87,8 +104,8 @@ class WahaClient:
                 "session": self.session,
                 "chatId": format_jid(chat_id),
             }
-            async with httpx.AsyncClient(base_url=self.base_url, headers=self.headers, timeout=5.0) as client:
-                await client.post("/api/startTyping", json=payload)
+            client = self._get_client()
+            await client.post("/api/startTyping", json=payload, timeout=5.0)
         except Exception:
             pass
 
@@ -99,8 +116,8 @@ class WahaClient:
                 "session": self.session,
                 "chatId": format_jid(chat_id),
             }
-            async with httpx.AsyncClient(base_url=self.base_url, headers=self.headers, timeout=5.0) as client:
-                await client.post("/api/stopTyping", json=payload)
+            client = self._get_client()
+            await client.post("/api/stopTyping", json=payload, timeout=5.0)
         except Exception:
             pass
 
@@ -124,12 +141,12 @@ class WahaClient:
         }
         
         try:
-            async with httpx.AsyncClient(base_url=self.base_url, headers=self.headers, timeout=10.0) as client:
-                res = await client.post("/api/sessions/start", json=payload)
-                if res.status_code in (200, 201, 400, 409):
-                    logger.info("WAHA session %s started / configured with webhook.", self.session)
-                    return True
-                logger.warning("WAHA webhook registration response: %d %s", res.status_code, res.text)
+            client = self._get_client()
+            res = await client.post("/api/sessions/start", json=payload, timeout=10.0)
+            if res.status_code in (200, 201, 400, 409):
+                logger.info("WAHA session %s started / configured with webhook.", self.session)
+                return True
+            logger.warning("WAHA webhook registration response: %d %s", res.status_code, res.text)
         except Exception as e:
             logger.warning("Could not automatically register webhook with WAHA (%s): %s", self.base_url, e)
         return False

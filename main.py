@@ -6,6 +6,7 @@ from config import settings
 from routers import webhook, admin, test_playground
 from services.management import start_scheduler
 from services.cache import init_redis, redis_client
+from services.whatsapp import whatsapp
 from services.logging_setup import init_logging
 from services.hours import get_hours_info
 
@@ -31,6 +32,7 @@ async def lifespan(app: FastAPI):
     yield
     
     # Teardown
+    await whatsapp.close()
     await redis_client.close()
     logger.info("Application shut down cleanly.")
 

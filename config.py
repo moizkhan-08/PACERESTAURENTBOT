@@ -57,6 +57,10 @@ class Settings(BaseSettings):
     DASHBOARD_PORT: int = Field(default=4434)
     DEBUG: bool = Field(default=False)
     ORDER_CONFIRM_TIMEOUT_MIN: int = Field(default=10)
+    WAHA_ENABLED: bool = Field(default=True)
+
+    # ── Admin API Security ──
+    ADMIN_API_KEY: str = Field(default="pace-admin-secret-change-me")
 
     # ── Observability & Logging ──
     LOG_LEVEL: str = Field(default="INFO")

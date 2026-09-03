@@ -3,27 +3,18 @@ import logging
 from typing import Optional
 from fastapi import APIRouter, Request, HTTPException
 from fastapi.responses import HTMLResponse
-from openai import AsyncOpenAI
 
 from config import settings
 from services.cache import redis_client
 from services.session import get_session, set_session, clear_session, generate_confirm_key
 from services.hours import get_hours_info
-from services.audio import transcribe_audio_payload
-from services.tools import (
-    read_menu,
-    send_menu_images,
-    calculate_bill,
-    check_returning_customer,
-    save_order_record,
-    notify_admins_and_kitchen
-)
+from services.tools import check_returning_customer
 from services.prompts import (
     FULL_MENU_SYSTEM_PROMPT,
     SOBAT_ONLY_SYSTEM_PROMPT,
     CLOSED_SYSTEM_PROMPT
 )
-from services.agent_runner import AGENT_TOOLS
+from services.agent_runner import run_agent_loop
 
 logger = logging.getLogger("test_playground")
 router = APIRouter()
@@ -57,7 +48,7 @@ async def simulate_chat_turn(payload: dict):
             "confirm_key": None
         }
 
-    # 2. Determine Shift
+    # 2. Determine Shift (Default to full_menu for instant testing)
     hours = get_hours_info()
     if override_shift == "closed":
         system_prompt = CLOSED_SYSTEM_PROMPT
@@ -65,10 +56,7 @@ async def simulate_chat_turn(payload: dict):
     elif override_shift == "sobat_only":
         system_prompt = SOBAT_ONLY_SYSTEM_PROMPT
         agent_type = "sobat_only"
-    elif override_shift == "full_menu":
-        system_prompt = FULL_MENU_SYSTEM_PROMPT
-        agent_type = "full_menu"
-    else:
+    elif override_shift == "live_clock":
         agent_type = hours.get("agent_type")
         if not hours["is_open"]:
             system_prompt = CLOSED_SYSTEM_PROMPT
@@ -76,123 +64,23 @@ async def simulate_chat_turn(payload: dict):
             system_prompt = SOBAT_ONLY_SYSTEM_PROMPT
         else:
             system_prompt = FULL_MENU_SYSTEM_PROMPT
+    else:
+        # Default in Web Simulator: Full Menu Open
+        system_prompt = FULL_MENU_SYSTEM_PROMPT
+        agent_type = "full_menu"
 
-    # 3. Build Conversation Messages
+    # 3. Run shared agent loop (simulator mode — mocks WhatsApp sends)
+    final_reply, executed_tools = await run_agent_loop(
+        phone=phone,
+        user_text=user_text,
+        session=session,
+        system_prompt=system_prompt,
+        hours=hours,
+        dispatch_mode="simulator"
+    )
+
+    # 4. Update session history
     history = session.get("history", [])
-    messages = [{"role": "system", "content": system_prompt}]
-    
-    context_note = f"[Customer Phone: {phone}]"
-    if session.get("name"):
-        context_note += f" [Customer Name: {session.get('name')}]"
-    if session.get("address"):
-        context_note += f" [Known Address: {session.get('address')}]"
-    context_note += f" [Current Time PKT: {hours.get('current_time_pkt')}]"
-    messages.append({"role": "system", "content": context_note})
-
-    for h in history[-8:]:
-        messages.append(h)
-
-    messages.append({"role": "user", "content": user_text})
-
-    # 4. Agent Tool Calling Execution
-    client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
-    final_reply = ""
-    latest_order_record = None
-    executed_tools = []
-
-    try:
-        for _ in range(5):
-            response = await client.chat.completions.create(
-                model=settings.OPENAI_MODEL,
-                messages=messages,
-                tools=AGENT_TOOLS,
-                tool_choice="auto",
-                temperature=0.4
-            )
-
-            assistant_msg = response.choices[0].message
-            messages.append(assistant_msg)
-
-            if not assistant_msg.tool_calls:
-                final_reply = assistant_msg.content or ""
-                break
-
-            for tool_call in assistant_msg.tool_calls:
-                tool_name = tool_call.function.name
-                tool_args = json.loads(tool_call.function.arguments or "{}")
-                tool_result = {}
-
-                if tool_name == "read_menu":
-                    category = tool_args.get("category")
-                    tool_result = await read_menu(category)
-
-                elif tool_name == "send_menu_images":
-                    tool_result = {
-                        "status": "success",
-                        "message": "Menu images displayed to customer in simulator.",
-                        "menu_images": [settings.MENU_IMAGE_1, settings.MENU_IMAGE_2]
-                    }
-
-                elif tool_name == "calculate_bill":
-                    items = tool_args.get("items", [])
-                    order_type = tool_args.get("order_type", "Delivery")
-                    thal_count = tool_args.get("thal_count", 0)
-                    calc = calculate_bill(items, order_type, thal_count)
-                    tool_result = calc
-                    
-                    session["items"] = calc["items"]
-                    session["subtotal"] = calc["subtotal"]
-                    session["thal_deposit"] = calc["thal_deposit"]
-                    session["total_bill"] = calc["total_bill"]
-                    session["order_type"] = order_type
-                    if not session.get("confirm_key"):
-                        session["confirm_key"] = generate_confirm_key(phone)
-
-                elif tool_name == "save_order":
-                    items = tool_args.get("items") or session.get("items", [])
-                    total_bill = tool_args.get("total_bill") or session.get("total_bill", 0)
-                    notes = tool_args.get("notes", "")
-                    
-                    if tool_args.get("customer_name"):
-                        session["name"] = tool_args["customer_name"]
-                    if tool_args.get("order_type"):
-                        session["order_type"] = tool_args["order_type"]
-                    if tool_args.get("delivery_address"):
-                        session["address"] = tool_args["delivery_address"]
-                    if tool_args.get("pickup_time"):
-                        session["pickup_time"] = tool_args["pickup_time"]
-                    
-                    saved = await save_order_record(session, items, total_bill, notes)
-                    tool_result = saved
-                    latest_order_record = saved
-
-                elif tool_name == "notify_admins_and_kitchen":
-                    order_id = tool_args.get("order_id", "PACE-CONFIRMED")
-                    tool_result = {
-                        "status": "simulated_dispatch",
-                        "order_id": order_id,
-                        "message": f"Order {order_id} alert simulated for kitchen & admin."
-                    }
-                    session["confirm_key"] = None
-
-                executed_tools.append({
-                    "name": tool_name,
-                    "args": tool_args,
-                    "result": tool_result
-                })
-
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": tool_call.id,
-                    "name": tool_name,
-                    "content": json.dumps(tool_result)
-                })
-
-    except Exception as e:
-        logger.exception("Test chat error: %s", e)
-        final_reply = f"Error executing agent loop: {str(e)}"
-
-    # Update session history
     history.append({"role": "user", "content": user_text})
     if final_reply:
         history.append({"role": "assistant", "content": final_reply})
@@ -645,10 +533,10 @@ HTML_TEST_UI = """<!DOCTYPE html>
             <div class="setting-group">
                 <span class="setting-label">🕒 Simulated Shift:</span>
                 <select id="shiftSelect">
-                    <option value="">Live PKT Clock</option>
-                    <option value="full_menu">Full Menu Shift</option>
-                    <option value="sobat_only">Sobat Special (3:30–6:30 PM)</option>
-                    <option value="closed">Closed Shift (Night)</option>
+                    <option value="full_menu" selected>🟢 Full Menu (Open for Orders)</option>
+                    <option value="sobat_only">🫕 Sobat Special Shift (3:30–6:30 PM)</option>
+                    <option value="closed">🌙 Closed Shift (Polite Closure)</option>
+                    <option value="live_clock">🕒 Real PKT Clock</option>
                 </select>
             </div>
 
