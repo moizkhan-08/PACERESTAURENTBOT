@@ -127,7 +127,11 @@ async def simulate_chat_turn(payload: dict):
                     tool_result = await read_menu(category)
 
                 elif tool_name == "send_menu_images":
-                    tool_result = await send_menu_images(phone)
+                    tool_result = {
+                        "status": "success",
+                        "message": "Menu images displayed to customer in simulator.",
+                        "menu_images": [settings.MENU_IMAGE_1, settings.MENU_IMAGE_2]
+                    }
 
                 elif tool_name == "calculate_bill":
                     items = tool_args.get("items", [])
@@ -164,22 +168,11 @@ async def simulate_chat_turn(payload: dict):
 
                 elif tool_name == "notify_admins_and_kitchen":
                     order_id = tool_args.get("order_id", "PACE-CONFIRMED")
-                    items_fallback = "\n".join([
-                        f"- {it.get('quantity', 1)}x {it.get('name')} ({it.get('variant', '')})"
-                        for it in session.get("items", [])
-                    ]) if session.get("items") else "Items"
-
-                    order_summary_data = {
-                        "customer_name": tool_args.get("customer_name") or session.get("name"),
-                        "phone_number": phone,
-                        "order_type": tool_args.get("order_type") or session.get("order_type"),
-                        "delivery_address": tool_args.get("delivery_address") or session.get("address"),
-                        "pickup_time": tool_args.get("pickup_time") or session.get("pickup_time"),
-                        "order_items": (latest_order_record.get("summary") if latest_order_record else None) or items_fallback,
-                        "total_bill": tool_args.get("total_bill") or session.get("total_bill", 0),
-                        "notes": tool_args.get("notes") or session.get("notes", "")
+                    tool_result = {
+                        "status": "simulated_dispatch",
+                        "order_id": order_id,
+                        "message": f"Order {order_id} alert simulated for kitchen & admin."
                     }
-                    tool_result = await notify_admins_and_kitchen(order_id, order_summary_data)
                     session["confirm_key"] = None
 
                 executed_tools.append({

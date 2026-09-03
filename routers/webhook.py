@@ -32,14 +32,9 @@ def verify_signature(raw_body: bytes, signature: str) -> bool:
 
 @router.post("/pace-restaurant")
 async def incoming_waha_webhook(req: Request, background_tasks: BackgroundTasks):
-    """
-    Ingestion endpoint for WAHA WhatsApp events:
-    1. Validates HMAC SHA-256 webhook signature
-    2. Enforces ALLOWED_NUMBERS access control gate
-    3. Prevents duplicate processing via Redis seen:msg_id keys
-    4. Intercepts authorized Admin in-chat commands
-    5. Dispatches LLM agent processing asynchronously
-    """
+    """WAHA webhook disabled — accepting messages only via Web Chatbot interface."""
+    logger.info("WAHA webhook event received but ignored (Web Chatbot testing mode active).")
+    return {"status": "waha_disabled_web_testing_mode_active"}
     raw_body = await req.body()
     signature = (
         req.headers.get("X-Webhook-Hmac")
