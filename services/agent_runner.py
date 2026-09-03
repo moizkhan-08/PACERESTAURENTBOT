@@ -378,9 +378,11 @@ async def process_message(payload: dict):
         logger.info("Customer %s is currently muted. Ignoring.", phone)
         return
 
+    waha_session = payload.get("session") or settings.WAHA_SESSION
+
     # Mark as seen & show typing indicator
-    await whatsapp.send_seen(sender_jid, msg_id)
-    await whatsapp.start_typing(sender_jid)
+    await whatsapp.send_seen(sender_jid, msg_id, session=waha_session)
+    await whatsapp.start_typing(sender_jid, session=waha_session)
 
     # 1. Handle Voice Note
     if has_media or media_info:
@@ -393,7 +395,7 @@ async def process_message(payload: dict):
                 user_text = "[Voice Note received but could not be transcribed]"
 
     if not user_text:
-        await whatsapp.stop_typing(sender_jid)
+        await whatsapp.stop_typing(sender_jid, session=waha_session)
         return
 
     # 2. Retrieve session state & history
@@ -429,9 +431,9 @@ async def process_message(payload: dict):
     )
 
     # 5. Send reply via WhatsApp
-    await whatsapp.stop_typing(sender_jid)
+    await whatsapp.stop_typing(sender_jid, session=waha_session)
     if final_reply:
-        await whatsapp.send_text(sender_jid, final_reply)
+        await whatsapp.send_text(sender_jid, final_reply, session=waha_session)
 
     # 6. Update session history in Redis
     history = session.get("history", [])

@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     # ── WhatsApp Gateway (WAHA) ──
     WAHA_API_URL: str = Field(default="http://localhost:32768")
     WAHA_API_KEY: str = Field(default="")
-    WAHA_SESSION: str = Field(default="Pace")
+    WAHA_SESSION: str = Field(default="mine")
     WAHA_WEBHOOK_SECRET: str = Field(default="pace_webhook_secret_default")
 
     # ── Supabase ──

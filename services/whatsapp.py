@@ -45,11 +45,11 @@ class WahaClient:
         if self._client and not self._client.is_closed:
             await self._client.close()
 
-    async def send_text(self, to: str, text: str) -> dict:
+    async def send_text(self, to: str, text: str, session: Optional[str] = None) -> dict:
         """Sends a text message via WAHA /api/sendText."""
         chat_id = format_jid(to)
         payload = {
-            "session": self.session,
+            "session": session or self.session,
             "chatId": chat_id,
             "text": text
         }
@@ -62,11 +62,11 @@ class WahaClient:
         res.raise_for_status()
         return {}
 
-    async def send_image(self, to: str, image_url: str, caption: str = "") -> dict:
+    async def send_image(self, to: str, image_url: str, caption: str = "", session: Optional[str] = None) -> dict:
         """Sends an image with caption via WAHA /api/sendImage."""
         chat_id = format_jid(to)
         payload = {
-            "session": self.session,
+            "session": session or self.session,
             "chatId": chat_id,
             "file": {
                 "url": image_url
@@ -82,11 +82,11 @@ class WahaClient:
         res.raise_for_status()
         return {}
 
-    async def send_seen(self, chat_id: str, message_id: Optional[str] = None):
+    async def send_seen(self, chat_id: str, message_id: Optional[str] = None, session: Optional[str] = None):
         """Marks message as seen."""
         try:
             payload = {
-                "session": self.session,
+                "session": session or self.session,
                 "chatId": format_jid(chat_id),
             }
             if message_id:
@@ -97,11 +97,11 @@ class WahaClient:
         except Exception as e:
             logger.debug("WAHA sendSeen notice: %s", e)
 
-    async def start_typing(self, chat_id: str):
+    async def start_typing(self, chat_id: str, session: Optional[str] = None):
         """Shows typing indicator in WhatsApp chat."""
         try:
             payload = {
-                "session": self.session,
+                "session": session or self.session,
                 "chatId": format_jid(chat_id),
             }
             client = self._get_client()
@@ -109,11 +109,11 @@ class WahaClient:
         except Exception:
             pass
 
-    async def stop_typing(self, chat_id: str):
+    async def stop_typing(self, chat_id: str, session: Optional[str] = None):
         """Clears typing indicator in WhatsApp chat."""
         try:
             payload = {
-                "session": self.session,
+                "session": session or self.session,
                 "chatId": format_jid(chat_id),
             }
             client = self._get_client()
