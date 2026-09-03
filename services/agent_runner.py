@@ -50,7 +50,7 @@ AGENT_TOOLS = [
         "type": "function",
         "function": {
             "name": "send_menu_images",
-            "description": "Sends high-resolution Pace Restaurant menu card images to customer WhatsApp.",
+            "description": "Sends high-resolution Pace Restaurant menu card images directly to the customer WhatsApp chat. Call this whenever the customer asks for the menu, menu card, food options, or pictures.",
             "parameters": {
                 "type": "object",
                 "properties": {}
@@ -153,7 +153,8 @@ async def execute_tool_call(
     session: dict,
     phone: str,
     dispatch_mode: str = "whatsapp",
-    latest_order_record: Optional[dict] = None
+    latest_order_record: Optional[dict] = None,
+    waha_session: Optional[str] = None
 ) -> tuple[dict, Optional[dict]]:
     """
     Executes a single tool call and returns (tool_result, updated_latest_order_record).
@@ -170,7 +171,7 @@ async def execute_tool_call(
 
     elif tool_name == "send_menu_images":
         if dispatch_mode == "whatsapp":
-            tool_result = await send_menu_images(phone)
+            tool_result = await send_menu_images(phone, session=waha_session)
         else:
             tool_result = {
                 "status": "success",
@@ -231,7 +232,7 @@ async def execute_tool_call(
                 "total_bill": tool_args.get("total_bill") or session.get("total_bill", 0),
                 "notes": tool_args.get("notes") or session.get("notes", "")
             }
-            tool_result = await notify_admins_and_kitchen(order_id, order_summary_data)
+            tool_result = await notify_admins_and_kitchen(order_id, order_summary_data, session=waha_session)
         else:
             tool_result = {
                 "status": "simulated_dispatch",
@@ -250,7 +251,8 @@ async def run_agent_loop(
     session: dict,
     system_prompt: str,
     hours: dict,
-    dispatch_mode: str = "whatsapp"
+    dispatch_mode: str = "whatsapp",
+    waha_session: Optional[str] = None
 ) -> tuple[str, list[dict]]:
     """
     Core OpenAI tool-calling execution loop. Shared between WhatsApp and Web Simulator.
@@ -311,7 +313,8 @@ async def run_agent_loop(
                     session=session,
                     phone=phone,
                     dispatch_mode=dispatch_mode,
-                    latest_order_record=latest_order_record
+                    latest_order_record=latest_order_record,
+                    waha_session=waha_session
                 )
 
                 executed_tools.append({
@@ -433,7 +436,8 @@ async def process_message(payload: dict):
         session=session,
         system_prompt=system_prompt,
         hours=hours,
-        dispatch_mode="whatsapp"
+        dispatch_mode="whatsapp",
+        waha_session=waha_session
     )
 
     # 5. Send reply via WhatsApp

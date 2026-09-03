@@ -19,6 +19,7 @@ async def call_with_retry(
     payload: Optional[dict] = None,
     attempts: int = 3,
     base_delay: float = 1.0,
+    timeout: float = 30.0,
     **kwargs
 ) -> Any:
     """
@@ -28,7 +29,7 @@ async def call_with_retry(
     last_err = None
     for i in range(attempts):
         try:
-            return await asyncio.wait_for(fn(*args, **kwargs), timeout=12.0)
+            return await asyncio.wait_for(fn(*args, **kwargs), timeout=timeout)
         except (httpx.TimeoutException, httpx.HTTPError, asyncio.TimeoutError, Exception) as e:
             last_err = e
             logger.warning("Attempt %d/%d for %s failed: %s", i + 1, attempts, kind, e)
@@ -80,8 +81,8 @@ async def invalidate_menu_cache():
     await redis_client.delete("cache:menu_items")
 
 
-async def send_menu_images(phone: str) -> dict:
-    """Sends Pace Restaurant menu image cards to customer."""
+async def send_menu_images(phone: str, session: Optional[str] = None) -> dict:
+    """Sends Pace Restaurant menu image cards to customer via the active session."""
     try:
         if settings.MENU_IMAGE_1:
             await call_with_retry(
@@ -89,6 +90,8 @@ async def send_menu_images(phone: str) -> dict:
                 phone,
                 settings.MENU_IMAGE_1,
                 caption="📖 Pace Restaurant Menu — Page 1",
+                session=session,
+                timeout=35.0,
                 kind="send_menu_image_1",
                 payload={"phone": phone}
             )
@@ -98,6 +101,8 @@ async def send_menu_images(phone: str) -> dict:
                 phone,
                 settings.MENU_IMAGE_2,
                 caption="📖 Pace Restaurant Menu — Page 2",
+                session=session,
+                timeout=35.0,
                 kind="send_menu_image_2",
                 payload={"phone": phone}
             )
@@ -250,7 +255,7 @@ async def save_order_record(session: dict, items: list[dict], total_bill: float,
     }
 
 
-async def notify_admins_and_kitchen(order_id: str, order_data: dict) -> dict:
+async def notify_admins_and_kitchen(order_id: str, order_data: dict, session: Optional[str] = None) -> dict:
     """
     Dispatches WhatsApp notifications to Kitchen, Admins, and Admin Group.
     Wrapped in retry + dead-letter queue so transient WhatsApp downtime doesn't break customer UX.
@@ -312,6 +317,7 @@ async def notify_admins_and_kitchen(order_id: str, order_data: dict) -> dict:
                 whatsapp.send_text,
                 target_jid,
                 message_body,
+                session=session,
                 kind=f"notify_{label}",
                 payload={"order_id": order_id, "target": target_jid}
             )
