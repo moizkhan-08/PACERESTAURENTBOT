@@ -683,8 +683,8 @@ HTML_TEST_UI = """<!DOCTYPE html>
             </div>
 
             <div class="chat-footer">
-                <input type="text" class="input-box" id="userMsgInput" placeholder="Type Roman Urdu or English message here..." onkeypress="handleKeyPress(event)">
-                <button class="btn" onclick="sendUserMessage()">Send 🚀</button>
+                <input type="text" class="input-box" id="userMsgInput" placeholder="Type Roman Urdu or English message here...">
+                <button class="btn" id="sendBtn" type="button" onclick="sendUserMessage()">Send 🚀</button>
             </div>
         </div>
 
@@ -716,6 +716,7 @@ HTML_TEST_UI = """<!DOCTYPE html>
     <script>
         const chatBody = document.getElementById('chatBody');
         const userMsgInput = document.getElementById('userMsgInput');
+        const sendBtn = document.getElementById('sendBtn');
         const typingIndicator = document.getElementById('typingIndicator');
         const toolsLogContainer = document.getElementById('toolsLogContainer');
         const sessionDataPre = document.getElementById('sessionDataPre');
@@ -726,10 +727,21 @@ HTML_TEST_UI = """<!DOCTYPE html>
             return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
         }
 
+        function escapeHtml(unsafe) {
+            return String(unsafe)
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#039;");
+        }
+
         function appendMessage(text, isUser) {
             const bubble = document.createElement('div');
             bubble.className = `message-bubble ${isUser ? 'msg-user' : 'msg-bot'}`;
-            bubble.innerHTML = text.replace(/\\n/g, '<br>');
+            
+            const formatted = escapeHtml(text).replace(/\\n/g, '<br>').replace(/\n/g, '<br>');
+            bubble.innerHTML = formatted;
 
             const timeSpan = document.createElement('span');
             timeSpan.className = 'msg-time';
@@ -740,11 +752,13 @@ HTML_TEST_UI = """<!DOCTYPE html>
             chatBody.scrollTop = chatBody.scrollHeight;
         }
 
-        function handleKeyPress(e) {
-            if (e.key === 'Enter') {
+        // Handle Enter key reliably
+        userMsgInput.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
                 sendUserMessage();
             }
-        }
+        });
 
         function sendQuickMsg(text) {
             userMsgInput.value = text;
@@ -753,12 +767,22 @@ HTML_TEST_UI = """<!DOCTYPE html>
 
         async function sendUserMessage() {
             const text = userMsgInput.value.trim();
-            const phone = document.getElementById('phoneInput').value.trim() || '923306874242';
-            const overrideShift = document.getElementById('shiftSelect').value;
+            const phoneEl = document.getElementById('phoneInput');
+            const shiftEl = document.getElementById('shiftSelect');
+            const phone = (phoneEl && phoneEl.value.trim()) || '923306874242';
+            const overrideShift = shiftEl ? shiftEl.value : null;
 
-            if (!text) return;
+            if (!text) {
+                userMsgInput.focus();
+                return;
+            }
 
-            // Render user bubble
+            // Disable button during processing
+            sendBtn.disabled = true;
+            sendBtn.innerText = 'Thinking... ⏳';
+            sendBtn.style.opacity = '0.6';
+
+            // Render user message bubble
             appendMessage(text, true);
             userMsgInput.value = '';
 
@@ -777,8 +801,15 @@ HTML_TEST_UI = """<!DOCTYPE html>
                     })
                 });
 
-                const data = await res.json();
                 typingIndicator.style.display = 'none';
+
+                if (!res.ok) {
+                    const errDetail = await res.text();
+                    appendMessage(`❌ Server Error (${res.status}): ${errDetail}`, false);
+                    return;
+                }
+
+                const data = await res.json();
 
                 if (data.reply) {
                     appendMessage(data.reply, false);
@@ -791,8 +822,13 @@ HTML_TEST_UI = """<!DOCTYPE html>
 
             } catch (err) {
                 typingIndicator.style.display = 'none';
-                appendMessage("❌ Network error connecting to test endpoint.", false);
-                console.error(err);
+                appendMessage(`❌ Network Error: ${err.message || 'Cannot reach /test/chat'}`, false);
+                console.error("Chat error:", err);
+            } finally {
+                sendBtn.disabled = false;
+                sendBtn.innerText = 'Send 🚀';
+                sendBtn.style.opacity = '1';
+                userMsgInput.focus();
             }
         }
 
@@ -806,11 +842,11 @@ HTML_TEST_UI = """<!DOCTYPE html>
                     const item = document.createElement('div');
                     item.className = 'tool-call-item';
                     item.innerHTML = `
-                        <div class="tool-name">🔧 ${tc.name}</div>
+                        <div class="tool-name">🔧 ${escapeHtml(tc.name)}</div>
                         <div style="font-size: 10px; color: var(--text-secondary); margin-bottom: 4px;">ARGS:</div>
-                        <pre>${JSON.stringify(tc.args, null, 2)}</pre>
+                        <pre>${escapeHtml(JSON.stringify(tc.args, null, 2))}</pre>
                         <div style="font-size: 10px; color: var(--text-secondary); margin-top: 6px; margin-bottom: 4px;">RESULT:</div>
-                        <pre>${JSON.stringify(tc.result, null, 2)}</pre>
+                        <pre>${escapeHtml(JSON.stringify(tc.result, null, 2))}</pre>
                     `;
                     toolsLogContainer.appendChild(item);
                 });
@@ -825,7 +861,7 @@ HTML_TEST_UI = """<!DOCTYPE html>
         }
 
         async function resetSession() {
-            const phone = document.getElementById('phoneInput').value.trim() || '923306874242';
+            const phone = (document.getElementById('phoneInput') && document.getElementById('phoneInput').value.trim()) || '923306874242';
             try {
                 await fetch('/test/reset', {
                     method: 'POST',
@@ -833,10 +869,10 @@ HTML_TEST_UI = """<!DOCTYPE html>
                     body: JSON.stringify({ phone: phone })
                 });
                 alert(`Session cleared for ${phone}! Next message will start fresh.`);
-                sessionDataPre.innerText = '{\n  "status": "Session reset"\n}';
+                sessionDataPre.innerText = '{\\n  "status": "Session reset"\\n}';
                 toolsLogContainer.innerHTML = '<div class="empty-state">Session reset. Send a message to test starting flow.</div>';
             } catch (err) {
-                alert('Error resetting session.');
+                alert('Error resetting session: ' + err.message);
             }
         }
     </script>
