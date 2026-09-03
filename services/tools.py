@@ -47,32 +47,43 @@ async def call_with_retry(
             await asyncio.sleep(base_delay * (2 ** i))
 
 
-async def read_menu(category: Optional[str] = None) -> list[dict]:
+async def read_menu(category: Optional[str] = None, search: Optional[str] = None) -> list[dict]:
     """
     Fetches available menu items.
     Cached in Redis for 120s to reduce DB load.
+    Supports filtering by category or searching item name.
     """
     cache_key = "cache:menu_items"
+    items = []
     try:
         cached = await redis_client.get(cache_key)
         if cached:
             items = json.loads(cached)
-            if category:
-                items = [it for it in items if it.get("category", "").lower() == category.lower()]
-            return items
     except Exception as e:
         logger.warning("Menu cache read error: %s", e)
 
-    # Fetch from Supabase
-    items = await db.get_menu(available_only=True)
-    if items:
-        try:
-            await redis_client.set(cache_key, json.dumps(items), ex=120)
-        except Exception:
-            pass
+    if not items:
+        items = await db.get_menu(available_only=True)
+        if items:
+            try:
+                await redis_client.set(cache_key, json.dumps(items), ex=120)
+            except Exception:
+                pass
 
-    if category:
-        items = [it for it in items if it.get("category", "").lower() == category.lower()]
+    query = search or category
+    if query:
+        q = query.strip().lower()
+        # 1. Match category (exact or partial)
+        matched = [it for it in items if q in it.get("category", "").lower()]
+        # 2. If no category matched, match item name (e.g. 'Sobat', 'Karahi', 'Tikka')
+        if not matched:
+            matched = [it for it in items if q in it.get("name", "").lower()]
+        # 3. Word token match
+        if not matched:
+            matched = [it for it in items if any(w in it.get("name", "").lower() for w in q.split() if len(w) > 2)]
+        if matched:
+            return matched
+
     return items
 
 

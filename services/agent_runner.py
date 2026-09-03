@@ -34,13 +34,17 @@ AGENT_TOOLS = [
         "type": "function",
         "function": {
             "name": "read_menu",
-            "description": "Reads live Pace Restaurant menu items, categories, variants, and prices.",
+            "description": "Reads live Pace Restaurant menu items, categories, variants, and prices from the database. Call this whenever a customer asks about prices, dish options, or what is available.",
             "parameters": {
                 "type": "object",
                 "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Item name, food dish, or category to search for, e.g. 'Sobat', 'Karahi', 'Boti', 'Tikka', 'Daal', 'Roti', 'Bar B Q', 'Pace Specialities', 'Chinese', 'Rice'"
+                    },
                     "category": {
                         "type": "string",
-                        "description": "Optional category filter, e.g. 'Sobat', 'Karahi', 'BBQ', 'Fast Food', 'Beverages'"
+                        "description": "Optional category filter"
                     }
                 }
             }
@@ -168,7 +172,8 @@ async def execute_tool_call(
 
     if tool_name == "read_menu":
         category = tool_args.get("category")
-        tool_result = await read_menu(category)
+        query = tool_args.get("query")
+        tool_result = await read_menu(category=category, search=query)
 
     elif tool_name == "send_menu_images":
         target = sender_jid or phone
