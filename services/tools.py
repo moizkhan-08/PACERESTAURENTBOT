@@ -179,8 +179,8 @@ async def calculate_bill(
             "notes": notes
         })
 
-    # Sobat Thal deposit (traditional brass/steel thal deposit if customer requested)
-    thal_deposit = thal_count * 200.0 if thal_count > 0 else 0.0
+    # Sobat Thal deposit (Rs. 300 per thal — refundable when returned to restaurant)
+    thal_deposit = thal_count * 300.0 if thal_count > 0 else 0.0
     total_bill = subtotal + thal_deposit
 
     is_delivery = order_type.lower() == "delivery"
@@ -340,3 +340,111 @@ async def notify_admins_and_kitchen(order_id: str, order_data: dict, session: Op
             logger.error("Failed to notify %s (%s): %s", label, target_jid, e)
 
     return {"status": "dispatched", "recipients": dispatched}
+
+
+async def report_complaint(phone: str, customer_name: str, complaint_text: str, session: Optional[str] = None) -> dict:
+    """
+    Sends food/service complaint notification to Admin Group and Admin WhatsApp.
+    Called when a customer reports issues with food quality, delivery, or service.
+    """
+    clean_name = sanitize_free_text(customer_name or "Customer")
+    clean_complaint = sanitize_free_text(complaint_text or "No details provided")
+
+    complaint_msg = (
+        f"⚠️ *CUSTOMER COMPLAINT ALERT*\n"
+        f"────────────────────\n"
+        f"👤 *Customer:* {clean_name}\n"
+        f"📞 *Phone:* {phone}\n"
+        f"────────────────────\n"
+        f"📝 *Complaint:*\n{clean_complaint}\n"
+        f"────────────────────\n"
+        f"⏰ Please follow up with this customer ASAP."
+    )
+
+    dispatched = []
+    targets = []
+    if settings.ADMIN_GROUP_JID:
+        targets.append(("admin_group", settings.ADMIN_GROUP_JID))
+    if settings.ADMIN_WHATSAPP:
+        targets.append(("admin_1", settings.ADMIN_WHATSAPP))
+
+    for label, target_jid in targets:
+        if not target_jid:
+            continue
+        try:
+            await call_with_retry(
+                whatsapp.send_text,
+                target_jid,
+                complaint_msg,
+                session=session,
+                kind=f"complaint_{label}",
+                payload={"phone": phone, "complaint": clean_complaint}
+            )
+            dispatched.append(label)
+        except Exception as e:
+            logger.error("Failed to send complaint to %s (%s): %s", label, target_jid, e)
+
+    return {"status": "complaint_reported", "recipients": dispatched}
+
+
+# ── Interactive Button Tools ──────────────────────────────────────────────────
+
+async def send_order_type_buttons(phone: str, session: Optional[str] = None) -> dict:
+    """Sends interactive Delivery/Takeaway buttons to the customer."""
+    try:
+        await whatsapp.send_buttons(
+            to=phone,
+            header="📦 Order Type",
+            body="Aap Delivery chahte hain ya Takeaway (restaurant se uthana)?",
+            footer="Pace Restaurant — Dera Ismail Khan",
+            buttons=[
+                {"type": "reply", "text": "🛵 Delivery"},
+                {"type": "reply", "text": "🛍️ Takeaway"}
+            ],
+            session=session
+        )
+        return {"status": "buttons_sent", "type": "order_type"}
+    except Exception as e:
+        logger.warning("Failed to send order type buttons to %s: %s", phone, e)
+        return {"status": "fallback_text", "message": "Aap Delivery chahte hain ya Takeaway?"}
+
+
+async def send_confirm_buttons(phone: str, order_summary: str, session: Optional[str] = None) -> dict:
+    """Sends order summary with Confirm/Cancel interactive buttons."""
+    try:
+        await whatsapp.send_buttons(
+            to=phone,
+            header="📋 Order Confirmation",
+            body=order_summary,
+            footer="Pace Restaurant — Cash on Delivery",
+            buttons=[
+                {"type": "reply", "text": "✅ Confirm Order"},
+                {"type": "reply", "text": "❌ Cancel"}
+            ],
+            session=session
+        )
+        return {"status": "buttons_sent", "type": "confirm"}
+    except Exception as e:
+        logger.warning("Failed to send confirm buttons to %s: %s", phone, e)
+        return {"status": "fallback_text", "message": order_summary + "\n\nConfirm karein? (YES / NO)"}
+
+
+async def send_thal_choice_buttons(phone: str, session: Optional[str] = None) -> dict:
+    """Sends Thal vs Disposable choice buttons for Sobat orders."""
+    try:
+        await whatsapp.send_buttons(
+            to=phone,
+            header="🍽️ Serving Choice",
+            body="Sobat kis mein chahiye?\n\n🍽️ Thal — Rs. 300 deposit (refundable, restaurant mein wapas karne par)\n📦 Disposable — Koi deposit nahi",
+            footer="Pace Restaurant",
+            buttons=[
+                {"type": "reply", "text": "🍽️ Thal (Rs.300 deposit)"},
+                {"type": "reply", "text": "📦 Disposable"}
+            ],
+            session=session
+        )
+        return {"status": "buttons_sent", "type": "thal_choice"}
+    except Exception as e:
+        logger.warning("Failed to send thal choice buttons to %s: %s", phone, e)
+        return {"status": "fallback_text", "message": "Thal mein chahiye ya disposable? Thal ka Rs.300 deposit hota hai."}
+

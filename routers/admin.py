@@ -69,3 +69,63 @@ async def set_maintenance(enabled: bool = Body(..., embed=True), admin_phone: st
     else:
         await redis_client.delete("flag:maintenance_only")
         return {"status": "success", "maintenance": False}
+
+
+# ── Dashboard API Endpoints ──────────────────────────────────────────────────
+
+@router.get("/orders/today", dependencies=[Depends(verify_admin_api_key)])
+async def get_today_orders():
+    """Returns today's orders with computed revenue stats for dashboard."""
+    return await db.get_today_orders_with_stats()
+
+
+@router.get("/orders/history", dependencies=[Depends(verify_admin_api_key)])
+async def get_order_history(offset: int = Query(default=0, ge=0), limit: int = Query(default=50, ge=1, le=200)):
+    """Paginated order history."""
+    return await db.get_orders_paginated(offset=offset, limit=limit)
+
+
+@router.get("/menu", dependencies=[Depends(verify_admin_api_key)])
+async def get_full_menu():
+    """Returns full menu including unavailable items for management."""
+    return await db.get_menu_all()
+
+
+@router.patch("/menu/{item_id}/toggle", dependencies=[Depends(verify_admin_api_key)])
+async def toggle_menu_item(item_id: str, available: bool = Body(..., embed=True)):
+    """Toggle menu item availability and invalidate cache."""
+    success = await db.toggle_menu_item(item_id, available)
+    if success:
+        await invalidate_menu_cache()
+        return {"status": "success", "item_id": item_id, "available": available}
+    raise HTTPException(status_code=500, detail="Failed to toggle menu item")
+
+
+@router.get("/customers", dependencies=[Depends(verify_admin_api_key)])
+async def get_customers(limit: int = Query(default=30, ge=1, le=100)):
+    """Returns recent customer list."""
+    return await db.get_recent_customers(limit=limit)
+
+
+@router.get("/muted", dependencies=[Depends(verify_admin_api_key)])
+async def get_muted_customers():
+    """Returns list of currently muted customer phones."""
+    mute_keys = await redis_client.keys("mute:*")
+    return [k.replace("mute:", "") for k in mute_keys]
+
+
+@router.post("/mute/{phone}", dependencies=[Depends(verify_admin_api_key)])
+async def mute_customer(phone: str):
+    """Mute a customer by phone number."""
+    clean = phone.strip().replace("+", "")
+    await redis_client.set(f"mute:{clean}", "1")
+    return {"status": "success", "muted": clean}
+
+
+@router.delete("/mute/{phone}", dependencies=[Depends(verify_admin_api_key)])
+async def unmute_customer(phone: str):
+    """Unmute a customer by phone number."""
+    clean = phone.strip().replace("+", "")
+    await redis_client.delete(f"mute:{clean}")
+    return {"status": "success", "unmuted": clean}
+

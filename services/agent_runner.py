@@ -15,7 +15,11 @@ from services.tools import (
     calculate_bill,
     check_returning_customer,
     save_order_record,
-    notify_admins_and_kitchen
+    notify_admins_and_kitchen,
+    report_complaint,
+    send_order_type_buttons,
+    send_confirm_buttons,
+    send_thal_choice_buttons
 )
 from services.prompts import (
     FULL_MENU_SYSTEM_PROMPT,
@@ -147,6 +151,68 @@ AGENT_TOOLS = [
                 "required": ["order_id", "total_bill"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "report_complaint",
+            "description": "Reports a customer food/service complaint to the Admin WhatsApp Group and Admin phone. Call this when a customer complains about food quality, taste, delivery issues, cold food, late delivery, wrong order, or any service problem.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "complaint_text": {
+                        "type": "string",
+                        "description": "Summary of the customer's complaint in their own words"
+                    },
+                    "customer_name": {
+                        "type": "string",
+                        "description": "Name of the complaining customer if known"
+                    }
+                },
+                "required": ["complaint_text"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "send_order_type_buttons",
+            "description": "Sends interactive WhatsApp buttons asking the customer to choose between Delivery or Takeaway. Call this at the START of every new order instead of asking via plain text.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "send_confirm_buttons",
+            "description": "Sends the order summary with interactive Confirm/Cancel buttons. Call this when you have the complete order summary ready and need the customer to confirm.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "order_summary": {
+                        "type": "string",
+                        "description": "The complete order summary text including items, prices, total, address/pickup, and customer name"
+                    }
+                },
+                "required": ["order_summary"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "send_thal_choice_buttons",
+            "description": "Sends interactive buttons asking customer to choose between Thal (Rs.300 refundable deposit) or Disposable packaging for Sobat/Paenda orders. Call this when the customer orders Sobat or Paenda.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        }
     }
 ]
 
@@ -219,6 +285,54 @@ async def execute_tool_call(
         saved = await save_order_record(session, items, total_bill, notes)
         tool_result = saved
         new_order_record = saved
+
+    elif tool_name == "report_complaint":
+        complaint_text = tool_args.get("complaint_text", "No details")
+        cust_name = tool_args.get("customer_name") or session.get("name", "")
+
+        if dispatch_mode == "whatsapp":
+            tool_result = await report_complaint(
+                phone=phone,
+                customer_name=cust_name,
+                complaint_text=complaint_text,
+                session=waha_session
+            )
+        else:
+            tool_result = {
+                "status": "simulated_complaint",
+                "message": f"Complaint reported for {phone}: {complaint_text}"
+            }
+
+    elif tool_name == "send_order_type_buttons":
+        if dispatch_mode == "whatsapp":
+            tool_result = await send_order_type_buttons(phone=phone, session=waha_session)
+        else:
+            tool_result = {
+                "status": "simulated_buttons",
+                "type": "order_type",
+                "message": "[BUTTONS SENT] Delivery ya Takeaway?"
+            }
+
+    elif tool_name == "send_confirm_buttons":
+        order_summary = tool_args.get("order_summary", "Order Summary")
+        if dispatch_mode == "whatsapp":
+            tool_result = await send_confirm_buttons(phone=phone, order_summary=order_summary, session=waha_session)
+        else:
+            tool_result = {
+                "status": "simulated_buttons",
+                "type": "confirm",
+                "message": f"[CONFIRM BUTTONS SENT] {order_summary}"
+            }
+
+    elif tool_name == "send_thal_choice_buttons":
+        if dispatch_mode == "whatsapp":
+            tool_result = await send_thal_choice_buttons(phone=phone, session=waha_session)
+        else:
+            tool_result = {
+                "status": "simulated_buttons",
+                "type": "thal_choice",
+                "message": "[BUTTONS SENT] Thal (Rs.300 deposit) ya Disposable?"
+            }
 
     elif tool_name == "notify_admins_and_kitchen":
         order_id = tool_args.get("order_id", "PACE-CONFIRMED")

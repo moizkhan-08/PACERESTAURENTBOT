@@ -316,6 +316,143 @@ class SupabaseDB:
         except Exception as e:
             logger.exception("Failed to write to failed_dispatches: %s", e)
 
+    async def get_menu_all(self) -> list[dict]:
+        """Fetch ALL menu items (including unavailable) for admin dashboard management."""
+        try:
+            async with self._get_client() as client:
+                res = await client.get(
+                    f"/{settings.SUPABASE_MENU_TABLE}",
+                    params={"select": "*", "order": "category.asc"}
+                )
+                if res.status_code == 200:
+                    raw_items = res.json()
+                    normalized = []
+                    for it in raw_items:
+                        row_id = it.get("id") or it.get("Id") or ""
+                        name = it.get("Item Name") or it.get("name") or "Unknown"
+                        category = it.get("category") or "General"
+                        price_raw = it.get("Price (Rs.)") or it.get("price") or 0
+                        variant = it.get("Price 2 / Per KG") or it.get("variant")
+                        is_avail = it.get("Itemavaiablility", True) if "Itemavaiablility" in it else it.get("available", True)
+
+                        try:
+                            price_val = float(str(price_raw).replace(",", "").strip())
+                        except Exception:
+                            price_val = 0.0
+
+                        normalized.append({
+                            "id": row_id,
+                            "name": name,
+                            "category": category,
+                            "price": price_val,
+                            "variant": variant if variant and variant != "—" else None,
+                            "available": bool(is_avail)
+                        })
+                    return normalized
+        except Exception as e:
+            logger.exception("Error fetching full menu for dashboard: %s", e)
+        return []
+
+    async def toggle_menu_item(self, item_id: str, available: bool) -> bool:
+        """Toggle a menu item's availability by its row ID."""
+        try:
+            async with self._get_client() as client:
+                res = await client.patch(
+                    f"/{settings.SUPABASE_MENU_TABLE}",
+                    params={"id": f"eq.{item_id}"},
+                    json={"Itemavaiablility": available}
+                )
+                if res.status_code in (200, 204):
+                    return True
+                logger.error("Failed to toggle menu item %s: %d %s", item_id, res.status_code, res.text)
+        except Exception as e:
+            logger.warning("Error toggling menu item %s: %s", item_id, e)
+        return False
+
+    async def get_today_orders_with_stats(self) -> dict:
+        """Fetch today's orders and compute summary stats for dashboard."""
+        import pytz
+        PKT = pytz.timezone("Asia/Karachi")
+        now_pkt = datetime.now(PKT)
+        start_of_day = now_pkt.replace(hour=0, minute=0, second=0, microsecond=0)
+        start_iso = start_of_day.astimezone(timezone.utc).isoformat()
+
+        orders = []
+        try:
+            async with self._get_client() as client:
+                res = await client.get(
+                    f"/{settings.SUPABASE_TABLE}",
+                    params={
+                        "created_at": f"gte.{start_iso}",
+                        "select": "*",
+                        "order": "created_at.desc"
+                    }
+                )
+                if res.status_code == 200:
+                    orders = res.json()
+        except Exception as e:
+            logger.warning("Error fetching today's orders: %s", e)
+
+        total_revenue = 0
+        delivery_count = 0
+        takeaway_count = 0
+        confirmed_count = 0
+        for o in orders:
+            try:
+                total_revenue += float(o.get("total_amount") or o.get("total_bill") or 0)
+            except (ValueError, TypeError):
+                pass
+            if o.get("order_type") == "Delivery":
+                delivery_count += 1
+            else:
+                takeaway_count += 1
+            status = (o.get("status") or "").lower()
+            if status in ("confirmed", "dispatched", "pending"):
+                confirmed_count += 1
+
+        return {
+            "orders": orders,
+            "stats": {
+                "total_orders": len(orders),
+                "confirmed_orders": confirmed_count,
+                "total_revenue": total_revenue,
+                "delivery_count": delivery_count,
+                "takeaway_count": takeaway_count,
+                "date": now_pkt.strftime("%d %b %Y"),
+                "time_pkt": now_pkt.strftime("%I:%M %p PKT")
+            }
+        }
+
+    async def get_orders_paginated(self, offset: int = 0, limit: int = 50) -> list[dict]:
+        """Fetch paginated order history for dashboard."""
+        try:
+            async with self._get_client() as client:
+                headers = {**self.headers, "Range": f"{offset}-{offset + limit - 1}"}
+                res = await client.get(
+                    f"/{settings.SUPABASE_TABLE}",
+                    params={"select": "*", "order": "created_at.desc"},
+                    headers=headers
+                )
+                if res.status_code in (200, 206):
+                    return res.json()
+        except Exception as e:
+            logger.warning("Error fetching paginated orders: %s", e)
+        return []
+
+    async def get_recent_customers(self, limit: int = 30) -> list[dict]:
+        """Fetch recent customers for admin dashboard."""
+        try:
+            async with self._get_client() as client:
+                res = await client.get(
+                    "/customers",
+                    params={"select": "*", "order": "id.desc", "limit": str(limit)}
+                )
+                if res.status_code == 200:
+                    return res.json()
+        except Exception as e:
+            logger.warning("Error fetching recent customers: %s", e)
+        return []
+
     async def get_failed_dispatches(self, unresolved_only: bool = True) -> list[dict]:
         """Fetch dead-letter records for operator dashboard."""
         try:

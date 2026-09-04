@@ -3,7 +3,7 @@ import logging
 from fastapi import FastAPI
 from fastapi.responses import RedirectResponse
 from config import settings
-from routers import webhook, admin, test_playground
+from routers import webhook, admin, test_playground, dashboard
 from services.management import start_scheduler
 from services.cache import init_redis, redis_client
 from services.whatsapp import whatsapp
@@ -25,8 +25,11 @@ async def lifespan(app: FastAPI):
     # 3. Start APScheduler Background Cron & Lock-protected jobs
     start_scheduler()
 
-    # 4. WAHA is temporarily disabled (Web Chatbot Testing Mode active)
-    logger.info("WAHA integration disabled for now. Operating in Web Chatbot Simulator Mode.")
+    # 4. WhatsApp Gateway status
+    if settings.WAHA_ENABLED:
+        logger.info("WAHA WhatsApp Gateway integration enabled (Session: %s).", settings.WAHA_SESSION)
+    else:
+        logger.info("WAHA integration disabled (Operating in Web Simulator Mode).")
 
     logger.info("Pace Restaurant AI Bot is ready and listening on port %d.", settings.APP_PORT)
     yield
@@ -48,6 +51,7 @@ app = FastAPI(
 app.include_router(webhook.router, prefix="/webhook", tags=["Webhook"])
 app.include_router(admin.router, prefix="/admin", tags=["Admin"])
 app.include_router(test_playground.router, prefix="/test", tags=["Testing Playground"])
+app.include_router(dashboard.router, prefix="/dashboard", tags=["Admin Dashboard"])
 
 
 @app.get("/health", tags=["Health"])
