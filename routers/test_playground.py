@@ -15,6 +15,7 @@ from services.prompts import (
     CLOSED_SYSTEM_PROMPT
 )
 from services.agent_runner import run_agent_loop
+from routers.admin_commands import handle_admin_command
 
 logger = logging.getLogger("test_playground")
 router = APIRouter()
@@ -46,6 +47,22 @@ async def simulate_chat_turn(payload: dict):
             "address": profile.get("default_address") if profile.get("is_returning") else "",
             "history": [],
             "confirm_key": None
+        }
+
+    # 1.5. Intercept in-chat Admin Commands (/status, /deactivate, /activate, /orders, /help, etc.)
+    is_admin_cmd, admin_reply = await handle_admin_command(phone, user_text, send_whatsapp=False)
+    if is_admin_cmd:
+        history = session.get("history", [])
+        history.append({"role": "user", "content": user_text})
+        history.append({"role": "assistant", "content": admin_reply})
+        session["history"] = history[-10:]
+        await set_session(phone, session)
+        return {
+            "reply": admin_reply,
+            "shift": "admin_command",
+            "time_pkt": get_hours_info().get("current_time_pkt"),
+            "session": session,
+            "tool_calls": [{"tool": "admin_command", "args": {"command": user_text}, "result": admin_reply}]
         }
 
     # 2. Determine Shift (Default to full_menu for instant testing)
@@ -538,9 +555,8 @@ HTML_TEST_UI = """<!DOCTYPE html>
                     <option value="closed">🌙 Closed Shift (Polite Closure)</option>
                     <option value="live_clock">🕒 Real PKT Clock</option>
                 </select>
-            </div>
-
             <button class="btn btn-danger" onclick="resetSession()">🔄 Reset Session</button>
+            <a href="/dashboard" class="btn btn-outline" style="text-decoration: none; display: flex; align-items: center; gap: 6px;">⚙️ Admin Controls</a>
         </div>
     </header>
 
@@ -566,8 +582,11 @@ HTML_TEST_UI = """<!DOCTYPE html>
                 <div class="chip" onclick="sendQuickMsg('Menu card dikhao')">📖 Show Menu Card</div>
                 <div class="chip" onclick="sendQuickMsg('1 Full Sobat delivery karni hai')">🫕 Order 1 Sobat Delivery</div>
                 <div class="chip" onclick="sendQuickMsg('Sobat ki price kia hai?')">💰 Check Sobat Price</div>
-                <div class="chip" onclick="sendQuickMsg('Aapki location kahan hai?')">📍 Restaurant Address</div>
-                <div class="chip" onclick="sendQuickMsg('Haan confirm hai order')">✅ Confirm Order (YES)</div>
+                <div class="chip" onclick="sendQuickMsg('/status')">⚙️ /status</div>
+                <div class="chip" onclick="sendQuickMsg('/orders')">📦 /orders</div>
+                <div class="chip" onclick="sendQuickMsg('/deactivate')">🛑 /deactivate</div>
+                <div class="chip" onclick="sendQuickMsg('/activate')">✅ /activate</div>
+                <div class="chip" onclick="sendQuickMsg('/help')">👑 /help</div>
             </div>
 
             <div class="chat-footer">

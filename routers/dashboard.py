@@ -331,9 +331,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         </div>
     </div>
     <div class="right">
+        <a href="/test" class="btn btn-ghost btn-sm" style="text-decoration:none;">💬 Chat Simulator</a>
         <div id="shiftPill" class="status-pill online"><span class="status-dot"></span> Loading...</div>
         <div id="botPill" class="status-pill online"><span class="status-dot"></span> Bot Active</div>
-        <button class="btn btn-ghost btn-sm" onclick="refreshAll()">🔄 Refresh</button>
+        <button class="btn btn-ghost btn-sm" onclick="refreshAll(true)">🔄 Refresh</button>
         <button class="btn btn-ghost btn-sm" onclick="doLogout()">🚪 Logout</button>
     </div>
 </div>
@@ -555,14 +556,35 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         autoRefreshTimer = setInterval(refreshAll, 30000);
     }
 
-    // Check saved key on load
+    // Toast Notification System
+    function showToast(msg, icon = '✅') {
+        const t = document.getElementById('toast');
+        if (!t) return;
+        document.getElementById('toastIcon').textContent = icon;
+        document.getElementById('toastMsg').textContent = msg;
+        t.style.display = 'flex';
+        t.style.animation = 'fadeUp 0.3s ease-out';
+        clearTimeout(window._toastTimer);
+        window._toastTimer = setTimeout(() => { t.style.display = 'none'; }, 3500);
+    }
+
+    // Check saved key on load or URL param, default to pace-admin-2026-secure-key
     (function() {
-        const saved = localStorage.getItem('pace_admin_key');
+        const urlParams = new URLSearchParams(window.location.search);
+        const urlKey = urlParams.get('key');
+        const saved = urlKey || localStorage.getItem('pace_admin_key') || 'pace-admin-2026-secure-key';
         if (saved) {
             API_KEY = saved;
             apiFetch('/admin/stats').then(data => {
-                if (data && data.restaurant) showDashboard();
-            }).catch(() => {});
+                if (data && data.restaurant) {
+                    localStorage.setItem('pace_admin_key', saved);
+                    showDashboard();
+                } else {
+                    document.getElementById('apiKeyInput').value = saved;
+                }
+            }).catch(() => {
+                document.getElementById('apiKeyInput').value = saved;
+            });
         }
     })();
 
@@ -586,9 +608,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
 
     // ── Refresh All ──
-    async function refreshAll() {
+    async function refreshAll(manual = false) {
         await Promise.all([loadStats(), loadOrders(), loadMenu(), loadControls(), loadDispatches()]);
         document.getElementById('lastRefresh').textContent = 'Updated ' + new Date().toLocaleTimeString();
+        if (manual) showToast('Dashboard updated!', '🔄');
     }
 
     // ── Stats + Orders ──
@@ -654,16 +677,21 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         // Build filter chips
         const categories = ['all', ...new Set(data.map(i => i.category))];
         document.getElementById('menuFilters').innerHTML = categories.map(c => 
-            `<div class="filter-chip ${c === activeMenuFilter ? 'active' : ''}" onclick="filterMenu('${c}')">${c === 'all' ? '🔖 All' : c}</div>`
+            `<div class="filter-chip ${c === activeMenuFilter ? 'active' : ''}" onclick="filterMenu('${c}', this)">${c === 'all' ? '🔖 All' : c}</div>`
         ).join('');
 
         renderMenuTable();
     }
 
-    function filterMenu(cat) {
+    function filterMenu(cat, el) {
         activeMenuFilter = cat;
         document.querySelectorAll('.filter-chip').forEach(c => c.classList.remove('active'));
-        event.target.classList.add('active');
+        if (el) {
+            el.classList.add('active');
+        } else {
+            const match = Array.from(document.querySelectorAll('.filter-chip')).find(chip => chip.textContent.includes(cat));
+            if (match) match.classList.add('active');
+        }
         renderMenuTable();
     }
 
@@ -689,11 +717,18 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
 
     async function toggleMenuItem(id, available) {
-        await apiFetch(`/admin/menu/${id}/toggle`, {
+        const res = await apiFetch(`/admin/menu/${id}/toggle`, {
             method: 'PATCH',
             body: JSON.stringify({ available })
         });
-        await loadMenu();
+        if (res && res.status === 'success') {
+            showToast(available ? '✅ Item set to Available' : '⚠️ Item set to Unavailable', available ? '✅' : '⚠️');
+            const item = menuData.find(i => String(i.id) === String(id));
+            if (item) item.available = available;
+        } else {
+            showToast('Failed to toggle menu item', '❌');
+            await loadMenu();
+        }
     }
 
     // ── Controls ──
@@ -711,37 +746,66 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
 
     async function toggleBot(active) {
-        await apiFetch('/admin/bot-toggle', {
+        const res = await apiFetch('/admin/bot-toggle', {
             method: 'POST',
             body: JSON.stringify({ active })
         });
+        if (res && res.status === 'success') {
+            showToast(active ? '🤖 Bot activated for all customers' : '🛑 Bot deactivated globally', active ? '🤖' : '🛑');
+        } else {
+            showToast('Failed to toggle bot', '❌');
+        }
         await loadStats();
     }
 
     async function toggleMaintenance(enabled) {
-        await apiFetch('/admin/maintenance', {
+        const res = await apiFetch('/admin/maintenance', {
             method: 'POST',
             body: JSON.stringify({ enabled })
         });
+        if (res && res.status === 'success') {
+            showToast(enabled ? '🛠️ Maintenance Mode enabled (Admin only)' : '✅ Maintenance Mode disabled (Public)', '🛠️');
+        } else {
+            showToast('Failed to toggle maintenance mode', '❌');
+        }
         await loadStats();
     }
 
     async function muteCustomer() {
         const phone = document.getElementById('mutePhoneInput').value.trim();
-        if (!phone) return;
-        await apiFetch(`/admin/mute/${phone}`, { method: 'POST' });
-        document.getElementById('mutePhoneInput').value = '';
-        await loadControls();
+        if (!phone) {
+            showToast('Please enter a phone number', '⚠️');
+            return;
+        }
+        const res = await apiFetch(`/admin/mute/${phone}`, { method: 'POST' });
+        if (res && res.status === 'success') {
+            showToast(`🔇 Customer ${phone} has been muted`, '🔇');
+            document.getElementById('mutePhoneInput').value = '';
+            await loadControls();
+            await loadStats();
+        } else {
+            showToast('Failed to mute customer', '❌');
+        }
     }
 
     async function unmuteCustomer(phone) {
-        await apiFetch(`/admin/mute/${phone}`, { method: 'DELETE' });
-        await loadControls();
+        const res = await apiFetch(`/admin/mute/${phone}`, { method: 'DELETE' });
+        if (res && res.status === 'success') {
+            showToast(`🔊 Customer ${phone} unmuted`, '🔊');
+            await loadControls();
+            await loadStats();
+        } else {
+            showToast('Failed to unmute customer', '❌');
+        }
     }
 
     async function clearMenuCache() {
-        await apiFetch('/admin/cache/clear-menu', { method: 'POST' });
-        alert('Menu cache cleared! Bot will reload from database.');
+        const res = await apiFetch('/admin/cache/clear-menu', { method: 'POST' });
+        if (res && res.status === 'success') {
+            showToast('🗑️ Menu cache flushed! DB reloaded', '🗑️');
+        } else {
+            showToast('Failed to clear cache', '❌');
+        }
     }
 
     // ── Dispatches ──
@@ -769,6 +833,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         return String(str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
     }
 </script>
+
+<!-- Toast Notification Container -->
+<div id="toast" style="position:fixed; bottom:24px; right:24px; z-index:9999; background:var(--bg-elevated); color:var(--text-primary); border:1px solid var(--border); border-left:4px solid var(--accent); padding:14px 22px; border-radius:var(--radius-sm); box-shadow:var(--shadow); display:none; align-items:center; gap:10px; font-size:13px; font-weight:600;">
+    <span id="toastIcon" style="font-size:16px;">ℹ️</span>
+    <span id="toastMsg">Action completed</span>
+</div>
+
 </body>
 </html>
 """

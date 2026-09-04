@@ -82,7 +82,7 @@ async def incoming_waha_webhook(req: Request, background_tasks: BackgroundTasks)
     # 2. In-Chat Admin Commands Interceptor
     user_text = data_payload.get("body", "").strip()
     if user_text:
-        is_admin_cmd = await handle_admin_command(sender, user_text)
+        is_admin_cmd, _ = await handle_admin_command(sender, user_text)
         if is_admin_cmd:
             return {"status": "admin_command_executed"}
 
