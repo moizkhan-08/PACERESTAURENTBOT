@@ -79,8 +79,19 @@ async def incoming_waha_webhook(req: Request, background_tasks: BackgroundTasks)
         logger.info("Message from non-allowlisted number ignored: %s", sender)
         return {"status": "not_allowed"}
 
-    # 2. In-Chat Admin Commands Interceptor
-    user_text = data_payload.get("body", "").strip()
+    # 2. Extract text (supports normal text, button clicks, and list responses)
+    user_text = str(
+        data_payload.get("body")
+        or data_payload.get("selectedDisplayText")
+        or data_payload.get("selectedButtonId")
+        or data_payload.get("selectedRowId")
+        or data_payload.get("title")
+        or (data_payload.get("_data", {}) if isinstance(data_payload.get("_data"), dict) else {}).get("body")
+        or (data_payload.get("_data", {}) if isinstance(data_payload.get("_data"), dict) else {}).get("selectedDisplayText")
+        or (data_payload.get("message", {}) if isinstance(data_payload.get("message"), dict) else {}).get("buttonsResponseMessage", {}).get("selectedDisplayText")
+        or (data_payload.get("message", {}) if isinstance(data_payload.get("message"), dict) else {}).get("templateButtonReplyMessage", {}).get("selectedDisplayText")
+        or ""
+    ).strip()
     if user_text:
         is_admin_cmd, _ = await handle_admin_command(sender, user_text)
         if is_admin_cmd:

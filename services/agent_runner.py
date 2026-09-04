@@ -413,8 +413,18 @@ async def process_message(payload: dict):
     phone = real_phone_jid.split("@")[0]
     msg_id = msg_payload.get("id")
     has_media = msg_payload.get("hasMedia", False)
-    media_info = msg_payload.get("media", {})
-    user_text = msg_payload.get("body", "").strip()
+    user_text = str(
+        msg_payload.get("body")
+        or msg_payload.get("selectedDisplayText")
+        or msg_payload.get("selectedButtonId")
+        or msg_payload.get("selectedRowId")
+        or msg_payload.get("title")
+        or (msg_payload.get("_data", {}) if isinstance(msg_payload.get("_data"), dict) else {}).get("body")
+        or (msg_payload.get("_data", {}) if isinstance(msg_payload.get("_data"), dict) else {}).get("selectedDisplayText")
+        or (msg_payload.get("message", {}) if isinstance(msg_payload.get("message"), dict) else {}).get("buttonsResponseMessage", {}).get("selectedDisplayText")
+        or (msg_payload.get("message", {}) if isinstance(msg_payload.get("message"), dict) else {}).get("templateButtonReplyMessage", {}).get("selectedDisplayText")
+        or ""
+    ).strip()
 
     if not phone or msg_payload.get("fromMe", False):
         return

@@ -1,5 +1,6 @@
 import os
 import sys
+import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import hmac
@@ -77,17 +78,15 @@ def test_hours_routing():
     print("[PASS] test_hours_routing passed")
 
 
-def test_calculator_math():
-    import asyncio
+@pytest.mark.anyio
+async def test_calculator_math():
     items = [
         {"name": "Full Chicken Sobat", "quantity": 1, "price": 1200.0, "variant": "Thal"},
         {"name": "Mineral Water Large", "quantity": 2, "price": 120.0, "variant": "1.5L"}
     ]
     # Delivery with Thal deposit (1 thal = Rs. 300 deposit)
     # calculate_bill is now async (validates prices against menu cache)
-    calc = asyncio.get_event_loop().run_until_complete(
-        calculate_bill(items, order_type="Delivery", thal_count=1)
-    )
+    calc = await calculate_bill(items, order_type="Delivery", thal_count=1)
     assert calc["subtotal"] == 1440.0
     assert calc["thal_deposit"] == 300.0
     assert calc["total_bill"] == 1740.0
@@ -95,9 +94,7 @@ def test_calculator_math():
 
     # Below minimum delivery check
     small_items = [{"name": "Roti", "quantity": 2, "price": 40.0}]
-    calc_small = asyncio.get_event_loop().run_until_complete(
-        calculate_bill(small_items, order_type="Delivery")
-    )
+    calc_small = await calculate_bill(small_items, order_type="Delivery")
     assert calc_small["subtotal"] == 80.0
     assert calc_small["meets_minimum_delivery"] is False  # Min is 300
     print("[PASS] test_calculator_math passed")
