@@ -47,10 +47,24 @@ async def call_with_retry(
             await asyncio.sleep(base_delay * (2 ** i))
 
 
+async def warm_menu_cache() -> list[dict]:
+    """Pre-fetches available menu items from database into Redis cache for instant sub-millisecond lookups."""
+    cache_key = "cache:menu_items"
+    try:
+        items = await db.get_menu(available_only=True)
+        if items:
+            await redis_client.set(cache_key, json.dumps(items), ex=86400)
+            logger.info("⚡ Menu cache warmed successfully (%d items cached).", len(items))
+            return items
+    except Exception as e:
+        logger.warning("Failed to warm menu cache: %s", e)
+    return []
+
+
 async def read_menu(category: Optional[str] = None, search: Optional[str] = None) -> list[dict]:
     """
     Fetches available menu items.
-    Cached in Redis for 120s to reduce DB load.
+    Cached in Redis for 24h to reduce DB load and ensure sub-5ms responses.
     Supports filtering by category or searching item name.
     """
     cache_key = "cache:menu_items"
@@ -63,12 +77,7 @@ async def read_menu(category: Optional[str] = None, search: Optional[str] = None
         logger.warning("Menu cache read error: %s", e)
 
     if not items:
-        items = await db.get_menu(available_only=True)
-        if items:
-            try:
-                await redis_client.set(cache_key, json.dumps(items), ex=120)
-            except Exception:
-                pass
+        items = await warm_menu_cache()
 
     query = search or category
     if query:
@@ -88,8 +97,12 @@ async def read_menu(category: Optional[str] = None, search: Optional[str] = None
 
 
 async def invalidate_menu_cache():
-    """Invalidates the Redis menu cache upon admin edits."""
+    """Flushes and immediately warms the Redis menu cache upon admin edits."""
     await redis_client.delete("cache:menu_items")
+    try:
+        await warm_menu_cache()
+    except Exception as e:
+        logger.warning("Background menu re-warm error: %s", e)
 
 
 async def send_menu_images(target: str, session: Optional[str] = None) -> dict:

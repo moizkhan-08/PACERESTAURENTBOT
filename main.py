@@ -19,8 +19,10 @@ async def lifespan(app: FastAPI):
     init_logging()
     logger.info("Initializing Pace Restaurant AI Bot in Web Chatbot Testing Mode...")
 
-    # 2. Connect to Redis (sessions, dedup, cache, distributed locks)
+    # 2. Connect to Redis & warm up menu cache
     await init_redis()
+    from services.tools import warm_menu_cache
+    await warm_menu_cache()
 
     # 3. Start APScheduler Background Cron & Lock-protected jobs
     start_scheduler()

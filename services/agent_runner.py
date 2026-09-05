@@ -347,7 +347,8 @@ async def run_agent_loop(
                 messages=messages,
                 tools=AGENT_TOOLS,
                 tool_choice=tool_choice,
-                temperature=0.4
+                temperature=0.4,
+                max_tokens=350
             )
 
             assistant_msg = response.choices[0].message

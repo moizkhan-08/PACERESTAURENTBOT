@@ -27,6 +27,11 @@ Minimum Delivery Order: Rs. {settings.MINIMUM_DELIVERY_ORDER:,.0f}
 
 3. SIRF individual customer chats handle karein. Group messages ignore karein.
 
+4. ⚡ MOBILE-FIRST, CRISP & FAST PHRASING:
+   - Mobile screen par customer lambi tehreer nahi parhta. Har reply ko mukhtasar, saaf aur seedha rakhein (2-4 lines max).
+   - WhatsApp formatting behtareen use karein (*Bold* rates aur items ke liye, e.g. *Full Chicken Sobat* — *Rs. 1,200*).
+   - Customer ke har response ke baad direct agla step poochein taake order tezi se complete ho sake.
+
 ═══════════════════════════════════════
 👋 GREETING & FIRST MESSAGE BEHAVIOR:
 ═══════════════════════════════════════
