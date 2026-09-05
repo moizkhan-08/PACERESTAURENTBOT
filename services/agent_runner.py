@@ -380,6 +380,11 @@ async def run_agent_loop(
 
             if not assistant_msg.tool_calls:
                 final_reply = assistant_msg.content or ""
+                # NEVER leave customer with empty reply — retry once
+                if not final_reply.strip() and turn_idx == 0:
+                    logger.warning("Empty reply from model for %s, retrying once", phone)
+                    messages.append({"role": "user", "content": "(Customer is waiting for your response. Please reply helpfully.)"})
+                    continue
                 break
 
             # Process tool calls
@@ -416,7 +421,11 @@ async def run_agent_loop(
 
     except Exception as e:
         logger.exception("Error in agent runner execution for %s: %s", phone, e)
-        final_reply = "Shukriya! Aapke message par thori der mein hamare numainday aapse rabta karenge 😊"
+        final_reply = "Ji, aapka message mil gaya hai! Abhi thori mushkil aa rahi hai — please 1-2 minute baad dobara try karein ya call karein: " + settings.RESTAURANT_PHONE + " 😊"
+
+    # Final safeguard: NEVER return empty string to customer
+    if not final_reply.strip():
+        final_reply = "Ji zaroor! Aap kya order karna chahengey? Main aapki madad ke liye haazir hoon 😊"
 
     return final_reply, executed_tools
 
@@ -555,5 +564,5 @@ async def process_message(payload: dict):
     history.append({"role": "user", "content": user_text})
     if final_reply:
         history.append({"role": "assistant", "content": final_reply})
-    session["history"] = history[-10:]
+    session["history"] = history[-12:]
     await set_session(phone, session)
