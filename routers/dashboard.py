@@ -521,30 +521,71 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     let menuData = [];
     let activeMenuFilter = 'all';
 
+    const KNOWN_KEYS = [
+        'pace-admin-secret-change-me',
+        'pace-admin-2026-secure-key'
+    ];
+
+    async function tryKey(key) {
+        if (!key) return false;
+        try {
+            const resp = await fetch('/admin/stats', {
+                headers: { 'X-Api-Key': key, 'Content-Type': 'application/json' }
+            });
+            if (resp.ok) {
+                const data = await resp.json();
+                if (data && data.restaurant) return true;
+            }
+        } catch (e) {
+            console.warn('Probe key failed:', e);
+        }
+        return false;
+    }
+
     // ── Auth ──
-    function doLogin() {
+    async function doLogin() {
         const key = document.getElementById('apiKeyInput').value.trim();
         if (!key) return;
-        API_KEY = key;
-        // Test the key with a real endpoint
-        apiFetch('/admin/stats').then(data => {
-            if (data && data.restaurant) {
-                localStorage.setItem('pace_admin_key', key);
+        const errEl = document.getElementById('loginError');
+        errEl.style.display = 'none';
+
+        // 1. Try entered key
+        if (await tryKey(key)) {
+            API_KEY = key;
+            localStorage.setItem('pace_admin_key', key);
+            showDashboard();
+            return;
+        }
+
+        // 2. Fallback check known keys
+        for (const alt of KNOWN_KEYS) {
+            if (await tryKey(alt)) {
+                API_KEY = alt;
+                localStorage.setItem('pace_admin_key', alt);
                 showDashboard();
-            } else {
-                document.getElementById('loginError').style.display = 'block';
+                return;
             }
-        }).catch(() => {
-            document.getElementById('loginError').style.display = 'block';
-        });
+        }
+        errEl.style.display = 'block';
     }
+
     document.getElementById('apiKeyInput').addEventListener('keydown', e => {
         if (e.key === 'Enter') doLogin();
     });
 
-    function doLogout() {
+    function doLogout(reload = true) {
         localStorage.removeItem('pace_admin_key');
-        location.reload();
+        API_KEY = '';
+        if (autoRefreshTimer) clearInterval(autoRefreshTimer);
+        document.getElementById('topBar').style.display = 'none';
+        document.getElementById('navTabs').style.display = 'none';
+        document.getElementById('mainContent').style.display = 'none';
+        document.getElementById('loginOverlay').style.display = 'flex';
+        document.getElementById('loginError').style.display = 'none';
+        document.getElementById('apiKeyInput').value = '';
+        if (reload) {
+            window.location.search = '';
+        }
     }
 
     function showDashboard() {
@@ -553,7 +594,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         document.getElementById('navTabs').style.display = 'flex';
         document.getElementById('mainContent').style.display = 'block';
         refreshAll();
-        autoRefreshTimer = setInterval(refreshAll, 30000);
+        if (!autoRefreshTimer) {
+            autoRefreshTimer = setInterval(refreshAll, 30000);
+        }
     }
 
     // Toast Notification System
@@ -568,33 +611,68 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         window._toastTimer = setTimeout(() => { t.style.display = 'none'; }, 3500);
     }
 
-    // Check saved key on load or URL param, default to pace-admin-2026-secure-key
-    (function() {
+    // Auto-probe candidate keys on page load
+    (async function initAuth() {
         const urlParams = new URLSearchParams(window.location.search);
         const urlKey = urlParams.get('key');
-        const saved = urlKey || localStorage.getItem('pace_admin_key') || 'pace-admin-2026-secure-key';
-        if (saved) {
-            API_KEY = saved;
-            apiFetch('/admin/stats').then(data => {
-                if (data && data.restaurant) {
-                    localStorage.setItem('pace_admin_key', saved);
-                    showDashboard();
-                } else {
-                    document.getElementById('apiKeyInput').value = saved;
-                }
-            }).catch(() => {
-                document.getElementById('apiKeyInput').value = saved;
-            });
+        const savedKey = localStorage.getItem('pace_admin_key');
+
+        const candidateKeys = [
+            urlKey,
+            savedKey,
+            'pace-admin-secret-change-me',
+            'pace-admin-2026-secure-key'
+        ].filter(Boolean);
+
+        for (const candidate of candidateKeys) {
+            if (await tryKey(candidate)) {
+                API_KEY = candidate;
+                localStorage.setItem('pace_admin_key', candidate);
+                showDashboard();
+                return;
+            }
         }
+        document.getElementById('apiKeyInput').value = candidateKeys[0] || '';
     })();
 
-    // ── API Helper ──
+    // ── Resilient API Helper ──
     async function apiFetch(url, opts = {}) {
-        const resp = await fetch(url, {
-            ...opts,
-            headers: { 'X-Api-Key': API_KEY, 'Content-Type': 'application/json', ...(opts.headers || {}) },
-        });
-        if (resp.status === 401) { doLogout(); return null; }
+        let resp;
+        try {
+            resp = await fetch(url, {
+                ...opts,
+                headers: { 'X-Api-Key': API_KEY, 'Content-Type': 'application/json', ...(opts.headers || {}) },
+            });
+        } catch (e) {
+            console.error('Network error during apiFetch:', e);
+            showToast('Network error contacting server', '⚠️');
+            return null;
+        }
+
+        // Silent fallback probe if 401 Unauthorized
+        if (resp.status === 401) {
+            for (const altKey of KNOWN_KEYS) {
+                if (altKey !== API_KEY) {
+                    try {
+                        const retry = await fetch(url, {
+                            ...opts,
+                            headers: { 'X-Api-Key': altKey, 'Content-Type': 'application/json', ...(opts.headers || {}) },
+                        });
+                        if (retry.ok) {
+                            API_KEY = altKey;
+                            localStorage.setItem('pace_admin_key', altKey);
+                            return retry.json();
+                        }
+                    } catch (retryErr) {
+                        // ignore
+                    }
+                }
+            }
+            showToast('Session expired or unauthorized (401)', '🔒');
+            doLogout(false);
+            return null;
+        }
+
         if (!resp.ok) return null;
         return resp.json();
     }
@@ -709,24 +787,27 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             <td>${i.variant ? esc(i.variant) : '<span style="color:var(--text-muted)">—</span>'}</td>
             <td>
                 <label class="toggle">
-                    <input type="checkbox" ${i.available ? 'checked' : ''} onchange="toggleMenuItem('${i.id}', this.checked)">
+                    <input type="checkbox" ${i.available ? 'checked' : ''} onchange="toggleMenuItem('${i.id}', this.checked, this)">
                     <span class="toggle-slider"></span>
                 </label>
             </td>
         </tr>`).join('');
     }
 
-    async function toggleMenuItem(id, available) {
+    async function toggleMenuItem(id, available, inputEl) {
+        if (inputEl) inputEl.disabled = true;
         const res = await apiFetch(`/admin/menu/${id}/toggle`, {
             method: 'PATCH',
             body: JSON.stringify({ available })
         });
+        if (inputEl) inputEl.disabled = false;
         if (res && res.status === 'success') {
             showToast(available ? '✅ Item set to Available' : '⚠️ Item set to Unavailable', available ? '✅' : '⚠️');
             const item = menuData.find(i => String(i.id) === String(id));
             if (item) item.available = available;
         } else {
             showToast('Failed to toggle menu item', '❌');
+            if (inputEl) inputEl.checked = !available;
             await loadMenu();
         }
     }
@@ -746,27 +827,35 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
 
     async function toggleBot(active) {
+        const cb = document.getElementById('toggleBotActive');
+        if (cb) cb.disabled = true;
         const res = await apiFetch('/admin/bot-toggle', {
             method: 'POST',
             body: JSON.stringify({ active })
         });
+        if (cb) cb.disabled = false;
         if (res && res.status === 'success') {
             showToast(active ? '🤖 Bot activated for all customers' : '🛑 Bot deactivated globally', active ? '🤖' : '🛑');
         } else {
             showToast('Failed to toggle bot', '❌');
+            if (cb) cb.checked = !active;
         }
         await loadStats();
     }
 
     async function toggleMaintenance(enabled) {
+        const cb = document.getElementById('toggleMaintenance');
+        if (cb) cb.disabled = true;
         const res = await apiFetch('/admin/maintenance', {
             method: 'POST',
             body: JSON.stringify({ enabled })
         });
+        if (cb) cb.disabled = false;
         if (res && res.status === 'success') {
             showToast(enabled ? '🛠️ Maintenance Mode enabled (Admin only)' : '✅ Maintenance Mode disabled (Public)', '🛠️');
         } else {
             showToast('Failed to toggle maintenance mode', '❌');
+            if (cb) cb.checked = !enabled;
         }
         await loadStats();
     }
