@@ -82,68 +82,6 @@ class WahaClient:
         res.raise_for_status()
         return {}
 
-    async def send_buttons(
-        self, to: str, header: str, body: str, footer: str,
-        buttons: list[dict], session: Optional[str] = None
-    ) -> dict:
-        """
-        Sends interactive button message via WAHA /api/sendButtons.
-        
-        buttons format: [{"type": "reply", "text": "Button Text"}, ...]
-        Supported types: reply, call (with phoneNumber), url (with url), copy (with copyCode)
-        """
-        chat_id = format_jid(to)
-        payload = {
-            "session": session or self.session,
-            "chatId": chat_id,
-            "header": header,
-            "body": body,
-            "footer": footer,
-            "buttons": buttons
-        }
-
-        try:
-            client = self._get_client()
-            res = await client.post("/api/sendButtons", json=payload, timeout=15.0)
-            if res.status_code in (200, 201):
-                return res.json()
-            logger.warning("WAHA sendButtons failed to %s: %d %s", chat_id, res.status_code, res.text)
-        except Exception as e:
-            logger.warning("sendButtons error for %s: %s", chat_id, e)
-        return {}
-
-    async def send_list(
-        self, to: str, title: str, description: str, footer: str,
-        button_text: str, sections: list[dict], session: Optional[str] = None
-    ) -> dict:
-        """
-        Sends interactive list message via WAHA /api/sendList.
-        
-        sections format: [{"title": "Section", "rows": [{"title": "Row", "rowId": "id", "description": "desc"}]}]
-        """
-        chat_id = format_jid(to)
-        payload = {
-            "session": session or self.session,
-            "chatId": chat_id,
-            "message": {
-                "title": title,
-                "description": description,
-                "footer": footer,
-                "button": button_text,
-                "sections": sections
-            }
-        }
-
-        try:
-            client = self._get_client()
-            res = await client.post("/api/sendList", json=payload, timeout=15.0)
-            if res.status_code in (200, 201):
-                return res.json()
-            logger.warning("WAHA sendList failed to %s: %d %s", chat_id, res.status_code, res.text)
-        except Exception as e:
-            logger.warning("sendList error for %s: %s", chat_id, e)
-        return {}
-
     async def send_seen(self, chat_id: str, message_id: Optional[str] = None, session: Optional[str] = None):
         """Marks message as seen."""
         try:

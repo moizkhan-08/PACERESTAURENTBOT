@@ -60,3 +60,12 @@ def test_prompts_instruction():
     assert "send_order_type_buttons" not in SYSTEM_BASE_INSTRUCTIONS
     assert "send_confirm_buttons" not in SYSTEM_BASE_INSTRUCTIONS
     assert "send_thal_choice_buttons" not in SYSTEM_BASE_INSTRUCTIONS
+    # Verify rule strictly forbidding buttons
+    assert "STRICTLY NO BUTTONS IN WHATSAPP CHAT" in SYSTEM_BASE_INSTRUCTIONS
+
+
+def test_whatsapp_service_has_no_buttons():
+    from services.whatsapp import whatsapp
+    assert not hasattr(whatsapp, "send_buttons")
+    assert not hasattr(whatsapp, "send_list")
+
