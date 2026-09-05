@@ -61,25 +61,35 @@ async def incoming_waha_webhook(req: Request, background_tasks: BackgroundTasks)
         return {"status": "invalid_json"}
 
     event_type = payload.get("event", "message")
+    waha_session = payload.get("session") or settings.WAHA_SESSION
     data_payload = payload.get("payload", {})
     msg_id = data_payload.get("id")
     sender = data_payload.get("from")
     from_me = data_payload.get("fromMe", False)
 
-    # Ignore system events, outbound messages sent by the bot itself, or group chats
+    # Ignore system events or outbound messages sent by the bot itself
     if from_me or not sender or not msg_id:
         return {"status": "ignored"}
 
-    # Ignore WhatsApp Group messages (JID ends with @g.us)
-    if sender and sender.endswith("@g.us"):
-        return {"status": "group_ignored"}
+    # Extract alternate identifiers for multi-device, linked devices (LID), and group participants
+    remote_jid_alt = (
+        data_payload.get("_data", {}).get("key", {}).get("remoteJidAlt")
+        or data_payload.get("remoteJidAlt")
+        or ""
+    )
+    participant = (
+        data_payload.get("participant")
+        or data_payload.get("author")
+        or data_payload.get("_data", {}).get("key", {}).get("participant")
+        or data_payload.get("_data", {}).get("participant")
+        or ""
+    )
 
-    # 1. Access Control Gate
-    if not is_number_allowed(sender):
-        logger.info("Message from non-allowlisted number ignored: %s", sender)
-        return {"status": "not_allowed"}
+    # Determine who authored the message
+    is_group = bool(sender and sender.endswith("@g.us"))
+    actor_jid = participant if is_group else (remote_jid_alt or sender)
 
-    # 2. Extract text (supports normal text, button clicks, and list responses)
+    # 1. Extract text (supports normal text, button clicks, and list responses)
     user_text = str(
         data_payload.get("body")
         or data_payload.get("selectedDisplayText")
@@ -92,10 +102,29 @@ async def incoming_waha_webhook(req: Request, background_tasks: BackgroundTasks)
         or (data_payload.get("message", {}) if isinstance(data_payload.get("message"), dict) else {}).get("templateButtonReplyMessage", {}).get("selectedDisplayText")
         or ""
     ).strip()
+
+    # 2. Intercept In-Chat Admin Commands FIRST (works in 1-on-1 chats and in Admin Group)
     if user_text:
-        is_admin_cmd, _ = await handle_admin_command(sender, user_text)
+        is_admin_cmd, _ = await handle_admin_command(
+            sender_jid=sender,
+            text=user_text,
+            send_whatsapp=True,
+            session=waha_session,
+            actor_jid=actor_jid,
+            remote_jid_alt=remote_jid_alt
+        )
         if is_admin_cmd:
             return {"status": "admin_command_executed"}
+
+    # 3. For regular customer order-taking: ignore group messages
+    if is_group:
+        return {"status": "group_ignored"}
+
+    # 4. Access Control Gate
+    effective_check_number = actor_jid or sender
+    if not is_number_allowed(effective_check_number):
+        logger.info("Message from non-allowlisted number ignored: %s", effective_check_number)
+        return {"status": "not_allowed"}
 
     # 3. Message Deduplication Layer (Redis 1 hour TTL)
     is_new = await redis_client.set(f"seen:{msg_id}", "1", nx=True, ex=3600)

@@ -7,16 +7,26 @@ logger = logging.getLogger("whatsapp")
 
 
 def format_jid(target: str) -> str:
-    """Formats phone number or group ID into standard WhatsApp JID."""
+    """
+    Formats phone number, LID, or group ID into standard WhatsApp JID.
+    Crucially strips any device suffix (e.g. :1, :2) from contact JIDs
+    which causes WAHA / Baileys to fail with 500 not-acceptable.
+    """
     if not target:
         return ""
     target = target.strip()
-    if "@" in target:
-        return target
-    # Clean non-digits
+    # If it's a group or LID, keep domain as-is, but strip device suffix if present
+    if "@g.us" in target or "@lid" in target:
+        parts = target.split("@")
+        user_part = parts[0].split(":")[0]
+        return f"{user_part}@{parts[1]}"
+    
+    # Strip any domain and device suffix
+    phone_part = target.split("@")[0].split(":")[0]
     import re
-    digits = re.sub(r"\D", "", target)
+    digits = re.sub(r"\D", "", phone_part)
     return f"{digits}@s.whatsapp.net"
+
 
 
 class WahaClient:

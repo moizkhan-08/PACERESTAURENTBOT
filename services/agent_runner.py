@@ -23,6 +23,7 @@ from services.prompts import (
     SOBAT_ONLY_SYSTEM_PROMPT,
     CLOSED_SYSTEM_PROMPT
 )
+from routers.admin_commands import handle_admin_command
 
 logger = logging.getLogger("agent_runner")
 
@@ -463,10 +464,20 @@ async def process_message(payload: dict):
     if not phone or msg_payload.get("fromMe", False):
         return
 
-    # Guard: ignore WhatsApp group messages (JID ends with @g.us)
-    if sender_jid.endswith("@g.us"):
-        logger.debug("Ignoring group message from %s", sender_jid)
-        return
+    waha_session = payload.get("session") or settings.WAHA_SESSION
+
+    # Guard: check for in-chat admin commands before bot_active / maintenance checks
+    if user_text:
+        is_admin_cmd, _ = await handle_admin_command(
+            sender_jid=sender_jid,
+            text=user_text,
+            send_whatsapp=True,
+            session=waha_session,
+            actor_jid=real_phone_jid,
+            remote_jid_alt=remote_jid_alt
+        )
+        if is_admin_cmd:
+            return
 
     # Check Bot Active flag
     bot_active = await redis_client.get("flag:bot_active")

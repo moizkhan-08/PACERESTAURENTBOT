@@ -15,49 +15,70 @@ def get_admin_numbers() -> set[str]:
     """Returns set of normalized admin phone numbers and allowlisted devices."""
     admins = set()
     # Configured admin phones
-    for raw in [settings.ADMIN_WHATSAPP, settings.ADMIN_2_WHATSAPP, "923306874242", "923322716555"]:
+    for raw in [
+        settings.ADMIN_WHATSAPP,
+        settings.ADMIN_2_WHATSAPP,
+        settings.KITCHEN_WHATSAPP,
+        settings.RESTAURANT_MOBILE,
+        "923306874242",
+        "923322716555",
+        "923299881590",
+        "923379221111"
+    ]:
         if raw:
-            clean = re.sub(r"\D", "", raw.split("@")[0])
+            clean = re.sub(r"\D", "", raw.split("@")[0].split(":")[0])
             if clean:
                 admins.add(clean)
 
     # Allowed test numbers & LIDs (e.g. 69630278291529, 94043224707153)
     if settings.ALLOWED_NUMBERS:
         for n in settings.ALLOWED_NUMBERS.split(","):
-            clean = re.sub(r"\D", "", n.strip().split("@")[0])
+            clean = re.sub(r"\D", "", n.strip().split("@")[0].split(":")[0])
             if clean:
                 admins.add(clean)
 
     return admins
 
 
-def is_authorized_admin(sender_jid: str, text: str) -> bool:
+def is_authorized_admin(
+    sender_jid: str,
+    text: str,
+    remote_jid_alt: Optional[str] = None
+) -> bool:
     """
     Validates if sender is authorized:
     1. Secret 'agent47' password prefix allows execution from any device.
     2. Phone match by exact string or 10-digit phone suffix.
     3. Allowlisted device IDs / LIDs.
+    4. Also checks remote_jid_alt if sender is a Linked Device / LID.
     """
     clean_text = text.strip().lower()
     if clean_text.startswith("agent47"):
         return True
 
-    clean_sender = re.sub(r"\D", "", sender_jid.split("@")[0])
-    if not clean_sender:
-        return False
-
     admin_numbers = get_admin_numbers()
 
-    # Exact match
-    if clean_sender in admin_numbers:
-        return True
+    candidates = [sender_jid]
+    if remote_jid_alt:
+        candidates.append(remote_jid_alt)
 
-    # Suffix match (e.g. 03306874242 vs 923306874242)
-    if len(clean_sender) >= 10:
-        sender_suffix = clean_sender[-10:]
-        for adm in admin_numbers:
-            if len(adm) >= 10 and adm[-10:] == sender_suffix:
-                return True
+    for cand in candidates:
+        if not cand:
+            continue
+        clean_cand = re.sub(r"\D", "", cand.split("@")[0].split(":")[0])
+        if not clean_cand:
+            continue
+
+        # Exact match
+        if clean_cand in admin_numbers:
+            return True
+
+        # Suffix match (e.g. 03306874242 vs 923306874242)
+        if len(clean_cand) >= 10:
+            cand_suffix = clean_cand[-10:]
+            for adm in admin_numbers:
+                if len(adm) >= 10 and adm[-10:] == cand_suffix:
+                    return True
 
     return False
 
@@ -65,7 +86,10 @@ def is_authorized_admin(sender_jid: str, text: str) -> bool:
 async def handle_admin_command(
     sender_jid: str,
     text: str,
-    send_whatsapp: bool = True
+    send_whatsapp: bool = True,
+    session: Optional[str] = None,
+    actor_jid: Optional[str] = None,
+    remote_jid_alt: Optional[str] = None
 ) -> tuple[bool, str]:
     """
     Processes in-chat admin commands.
@@ -74,31 +98,47 @@ async def handle_admin_command(
     text_clean = text.strip()
     lower_text = text_clean.lower()
 
-    # Check if text looks like an admin command
-    is_prefixed = (
-        lower_text.startswith("/")
-        or lower_text.startswith("agent47")
-        or lower_text.startswith("mute")
-        or lower_text.startswith("unmute")
-        or lower_text in {"status", "help", "orders", "activate", "deactivate"}
-    )
-    if not is_prefixed:
+    # Secret agent47 password prefix allows execution from any device
+    is_secret = lower_text.startswith("agent47")
+    if is_secret:
+        lower_text = lower_text[7:].strip()
+        text_clean = text_clean[7:].strip()
+
+    # Strip command prefix character if present ('/', '!', '#', '.')
+    if lower_text.startswith(("/", "!", "#", ".")):
+        lower_text = lower_text[1:].strip()
+        text_clean = text_clean[1:].strip()
+
+    parts = text_clean.split()
+    if not parts:
+        return False, ""
+
+    raw_cmd = parts[0].lower()
+
+    # Handle 'bot <command>' or 'admin <command>' e.g. 'bot status', 'bot off', 'bot on'
+    if raw_cmd in {"bot", "admin"} and len(parts) > 1:
+        parts = parts[1:]
+        raw_cmd = parts[0].lower()
+
+    known_commands = {
+        "status", "orders", "today", "help", "commands",
+        "activate", "on", "start",
+        "deactivate", "off", "stop",
+        "maintenance", "maint",
+        "mute", "unmute",
+        "clearcache", "clear-cache", "refreshmenu"
+    }
+
+    if raw_cmd not in known_commands:
         return False, ""
 
     # Authorization check
-    if not is_authorized_admin(sender_jid, text_clean):
+    effective_actor = actor_jid or sender_jid
+    if not is_secret and not is_authorized_admin(effective_actor, text.strip(), remote_jid_alt=remote_jid_alt):
         return False, ""
 
-    clean_sender = re.sub(r"\D", "", sender_jid.split("@")[0]) or "admin"
-    parts = text_clean.split()
-    raw_cmd = parts[0].lower()
-
-    # Normalize command keyword
-    if raw_cmd.startswith("agent47"):
-        command = raw_cmd[7:].lstrip("/")
-    else:
-        command = raw_cmd.lstrip("/")
-
+    clean_sender = re.sub(r"\D", "", effective_actor.split("@")[0].split(":")[0]) or "admin"
+    command = raw_cmd
     args = parts[1:] if len(parts) > 1 else []
     target = args[0] if args else None
     response_msg = ""
@@ -226,7 +266,7 @@ async def handle_admin_command(
     # Audit logging
     try:
         await db.log_admin_action(
-            actor_jid=sender_jid,
+            actor_jid=clean_sender,
             command=command,
             target=target
         )
@@ -236,9 +276,9 @@ async def handle_admin_command(
     # WhatsApp reply
     if send_whatsapp:
         try:
-            await whatsapp.send_text(sender_jid, response_msg)
+            await whatsapp.send_text(sender_jid, response_msg, session=session)
         except Exception as e:
             logger.warning("Could not send admin reply to %s: %s", sender_jid, e)
 
-    logger.info("Admin command '%s' executed by %s", text_clean, sender_jid)
+    logger.info("Admin command '%s' executed by %s", text_clean, clean_sender)
     return True, response_msg
