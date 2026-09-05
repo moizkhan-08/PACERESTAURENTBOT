@@ -311,17 +311,41 @@ async def run_agent_loop(
     history = session.get("history", [])
     messages = [{"role": "system", "content": system_prompt}]
     
-    # Inject context metadata
-    context_note = f"[Customer Phone: {phone}]"
+    # Inject context metadata for smarter, personalized responses
+    time_pkt = hours.get("current_time_pkt", "")
+    # Determine time-of-day period for greeting style
+    time_period = "day"
+    try:
+        hour_num = int(time_pkt.split(":")[0])
+        ampm = time_pkt.strip()[-2:].upper()
+        if ampm == "PM" and hour_num != 12:
+            hour_num += 12
+        elif ampm == "AM" and hour_num == 12:
+            hour_num = 0
+        if 6 <= hour_num < 12:
+            time_period = "morning"
+        elif 12 <= hour_num < 17:
+            time_period = "afternoon"
+        elif 17 <= hour_num < 21:
+            time_period = "evening"
+        else:
+            time_period = "night"
+    except Exception:
+        pass
+
+    context_note = f"[Customer Phone: {phone}] [Time PKT: {time_pkt}] [Time Period: {time_period}]"
     if session.get("name"):
-        context_note += f" [Customer Name: {session.get('name')}]"
+        context_note += f" [Returning Customer Name: {session['name']}]"
     if session.get("address"):
-        context_note += f" [Known Address: {session.get('address')}]"
-    context_note += f" [Current Time PKT: {hours.get('current_time_pkt')}]"
+        context_note += f" [Known Address: {session['address']}]"
+    if session.get("order_type"):
+        context_note += f" [Order Stage: {session['order_type']} in progress]"
+    if session.get("total_bill"):
+        context_note += f" [Staged Bill: Rs. {session['total_bill']}]"
     messages.append({"role": "system", "content": context_note})
 
-    # Add past turn history (last 8 turns)
-    for h in history[-8:]:
+    # Add past turn history (last 12 turns for better order flow context)
+    for h in history[-12:]:
         messages.append(h)
 
     # Add current user message
@@ -348,7 +372,7 @@ async def run_agent_loop(
                 tools=AGENT_TOOLS,
                 tool_choice=tool_choice,
                 temperature=0.4,
-                max_tokens=350
+                max_tokens=500
             )
 
             assistant_msg = response.choices[0].message
