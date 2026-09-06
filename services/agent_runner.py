@@ -369,7 +369,20 @@ async def run_agent_loop(
         g in user_text.lower() for g in ["assalam o alaikum", "assalamu alaikum", "good morning", "good evening", "good afternoon"]
     )
     is_first_interaction = len(history) == 0 or not any(h.get("role") == "assistant" for h in history)
-    should_send_menu = force_menu or (is_first_interaction and is_greeting) or (is_first_interaction and len(user_words) <= 4)
+    # Guaranteed menu dispatch: anytime user greets, asks for menu, or is first interaction
+    should_send_menu = force_menu or is_greeting or is_first_interaction or len(user_words) <= 3
+
+    if is_greeting:
+        messages.append({
+            "role": "system",
+            "content": (
+                "MANDATORY GREETING INSTRUCTION:\n"
+                "1) Greet warmly (e.g. 'Assalam-o-Alaikum! 🌟').\n"
+                "2) Welcome to Pace Restaurant (e.g. '*Pace Restaurant, Dera Ismail Khan* mein khush amdeed! 🍽️').\n"
+                "3) Explicitly mention menu card sent 👆 ('Yeh raha humara menu card 👆').\n"
+                "4) Ask for choice: Delivery or Takeaway? ('Aap *Delivery* karwana chahte hain ya *Takeaway*?')"
+            )
+        })
 
     try:
         for turn_idx in range(5):  # Max 5 tool iterations per turn
@@ -549,7 +562,10 @@ async def process_message(payload: dict):
 
     # 3. Determine operational shift
     hours = get_hours_info()
-    if not hours["is_open"]:
+    force_open = await redis_client.get("flag:force_open") == "1"
+    if force_open:
+        system_prompt = FULL_MENU_SYSTEM_PROMPT
+    elif not hours["is_open"]:
         system_prompt = CLOSED_SYSTEM_PROMPT
     elif hours["is_break_time"]:
         system_prompt = SOBAT_ONLY_SYSTEM_PROMPT

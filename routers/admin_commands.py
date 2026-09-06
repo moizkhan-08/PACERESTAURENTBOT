@@ -241,23 +241,42 @@ async def handle_admin_command(
 
         response_msg = "\n".join(lines)
 
-    # ── 7. Admin Help Menu ──
+    # ── 7. Test Mode & Session Reset ──
+    elif command in {"testmode", "forceopen"}:
+        if args and args[0].lower() in {"on", "enable", "1", "true"}:
+            await redis_client.set("flag:force_open", "1")
+            response_msg = "🧪 *Test Mode Enabled*\nShift forced to FULL MENU (Open) for testing anytime."
+        else:
+            await redis_client.delete("flag:force_open")
+            response_msg = "🕒 *Test Mode Disabled*\nShift returned to real-time operating hours."
+
+    elif command in {"reset", "clearsession"}:
+        target_phone = re.sub(r"\D", "", args[0]) if args else re.sub(r"\D", "", clean_sender)
+        if target_phone:
+            from services.cache import delete_session
+            await delete_session(target_phone)
+            response_msg = f"🔄 *Session Reset*\nSession history cleared for `{target_phone}`. Next message will be treated as a fresh interaction."
+        else:
+            response_msg = "⚠️ Could not identify phone number to reset."
+
+    # ── 8. Admin Help Menu ──
     elif command in {"help", "commands"}:
         response_msg = (
             f"👑 *Pace Restaurant — Admin Commands*\n"
             f"────────────────────\n"
             f"• `/status` — View live bot status & today's sales\n"
             f"• `/orders` — View today's orders & revenue breakdown\n"
+            f"• `/testmode on|off` — Force Full Menu open for testing\n"
+            f"• `/reset [phone]` — Clear session history for fresh test\n"
             f"• `/activate` — Enable automated AI order-taking\n"
             f"• `/deactivate` — Pause automated AI order-taking\n"
-            f"• `/maintenance on` — Restrict bot to admin only\n"
-            f"• `/maintenance off` — Reopen bot to all customers\n"
+            f"• `/maintenance on|off` — Restrict bot to admin only\n"
             f"• `/mute <phone>` — Mute a disruptive customer\n"
             f"• `/unmute <phone>` — Unmute customer\n"
             f"• `/unmute all` — Clear all customer mutes\n"
             f"• `/clear-cache` — Force reload menu from DB\n"
             f"────────────────────\n"
-            f"💡 *Tip:* You can also type commands without `/` (e.g. `status`, `mute 92300...`)"
+            f"💡 *Tip:* You can also type commands without `/` (e.g. `status`, `testmode on`)"
         )
 
     else:
