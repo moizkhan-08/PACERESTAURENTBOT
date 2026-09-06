@@ -356,7 +356,7 @@ async def run_agent_loop(
     latest_order_record = None
     executed_tools = []
 
-    # Deterministic trigger: guarantee send_menu_images is called on menu requests OR on first greeting / first interaction
+    # Deterministic trigger: send_menu_images ONLY on first greeting OR explicit menu request
     user_words = set(user_text.lower().split())
     menu_triggers = {"menu", "card", "tasweer", "tasweerein", "pic", "pics", "photo", "photos", "menyu"}
     force_menu = bool(user_words.intersection(menu_triggers)) or any(t in user_text.lower() for t in ["menu dikhao", "menu bhejo", "menu card", "show menu"])
@@ -369,10 +369,11 @@ async def run_agent_loop(
         g in user_text.lower() for g in ["assalam o alaikum", "assalamu alaikum", "good morning", "good evening", "good afternoon"]
     )
     is_first_interaction = len(history) == 0 or not any(h.get("role") == "assistant" for h in history)
-    # Guaranteed menu dispatch: anytime user greets, asks for menu, or is first interaction
-    should_send_menu = force_menu or is_greeting or is_first_interaction or len(user_words) <= 3
 
-    if is_greeting:
+    # Menu pics ONLY on: (1) first interaction greeting, or (2) user explicitly asks for menu
+    should_send_menu = force_menu or (is_first_interaction and is_greeting)
+
+    if is_greeting and is_first_interaction:
         messages.append({
             "role": "system",
             "content": (

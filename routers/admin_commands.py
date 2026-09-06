@@ -253,8 +253,8 @@ async def handle_admin_command(
     elif command in {"reset", "clearsession"}:
         target_phone = re.sub(r"\D", "", args[0]) if args else re.sub(r"\D", "", clean_sender)
         if target_phone:
-            from services.cache import delete_session
-            await delete_session(target_phone)
+            from services.session import clear_session
+            await clear_session(target_phone)
             response_msg = f"🔄 *Session Reset*\nSession history cleared for `{target_phone}`. Next message will be treated as a fresh interaction."
         else:
             response_msg = "⚠️ Could not identify phone number to reset."
