@@ -356,15 +356,25 @@ async def run_agent_loop(
     latest_order_record = None
     executed_tools = []
 
-    # Deterministic trigger: if customer asks for the menu, guarantee send_menu_images is called
+    # Deterministic trigger: guarantee send_menu_images is called on menu requests OR on first greeting / first interaction
     user_words = set(user_text.lower().split())
     menu_triggers = {"menu", "card", "tasweer", "tasweerein", "pic", "pics", "photo", "photos", "menyu"}
     force_menu = bool(user_words.intersection(menu_triggers)) or any(t in user_text.lower() for t in ["menu dikhao", "menu bhejo", "menu card", "show menu"])
 
+    greeting_triggers = {
+        "salam", "assalam", "asalam", "slaam", "aoa",
+        "hi", "hello", "hey", "start", "aadaab", "adab", "good"
+    }
+    is_greeting = bool(user_words.intersection(greeting_triggers)) or any(
+        g in user_text.lower() for g in ["assalam o alaikum", "assalamu alaikum", "good morning", "good evening", "good afternoon"]
+    )
+    is_first_interaction = len(history) == 0 or not any(h.get("role") == "assistant" for h in history)
+    should_send_menu = force_menu or (is_first_interaction and is_greeting) or (is_first_interaction and len(user_words) <= 4)
+
     try:
         for turn_idx in range(5):  # Max 5 tool iterations per turn
             tool_choice = "auto"
-            if turn_idx == 0 and force_menu:
+            if turn_idx == 0 and should_send_menu:
                 tool_choice = {"type": "function", "function": {"name": "send_menu_images"}}
 
             response = await openai_client.chat.completions.create(
