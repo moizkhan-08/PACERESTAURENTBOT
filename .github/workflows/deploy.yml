@@ -17,9 +17,10 @@ jobs:
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.HOSTINGER_HOST || secrets.VPS_HOST || '72.61.151.29' }}
-          username: ${{ secrets.HOSTINGER_USER || secrets.VPS_USER }}
+          username: ${{ secrets.HOSTINGER_USER || secrets.VPS_USER || 'root' }}
           key: ${{ secrets.HOSTINGER_SSH_KEY || secrets.VPS_SSH_KEY }}
-          port: 22
+          password: ${{ secrets.HOSTINGER_PASSWORD || secrets.VPS_PASSWORD }}
+          port: ${{ secrets.HOSTINGER_PORT || secrets.VPS_PORT || 22 }}
           script: |
             set -e
             

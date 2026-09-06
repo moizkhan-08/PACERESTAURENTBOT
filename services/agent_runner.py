@@ -448,6 +448,7 @@ async def process_message(payload: dict):
     phone = real_phone_jid.split("@")[0]
     msg_id = msg_payload.get("id")
     has_media = msg_payload.get("hasMedia", False)
+    media_info = msg_payload.get("media", {}) if isinstance(msg_payload.get("media"), dict) else {}
     user_text = str(
         msg_payload.get("body")
         or msg_payload.get("selectedDisplayText")
@@ -568,7 +569,13 @@ async def process_message(payload: dict):
             await whatsapp.send_text(sender_jid, final_reply, session=waha_session)
             logger.info("Outbound WhatsApp reply dispatched to %s via session %s", sender_jid, waha_session)
         except Exception as e:
-            logger.error("Failed to dispatch WhatsApp reply to %s: %s", sender_jid, e)
+            logger.warning("Failed to dispatch WhatsApp reply to %s: %s. Attempting fallback to %s", sender_jid, e, real_phone_jid)
+            if real_phone_jid and real_phone_jid != sender_jid:
+                try:
+                    await whatsapp.send_text(real_phone_jid, final_reply, session=waha_session)
+                    logger.info("Outbound WhatsApp reply dispatched to fallback JID %s", real_phone_jid)
+                except Exception as e2:
+                    logger.error("Failed to dispatch to fallback JID %s: %s", real_phone_jid, e2)
 
     # 6. Update session history in Redis
     history = session.get("history", [])
