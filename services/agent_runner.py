@@ -287,8 +287,15 @@ async def execute_tool_call(
                 "order_id": order_id,
                 "message": f"Order {order_id} alert simulated for kitchen & admin."
             }
-        # Reset confirm key for fresh next order
+        # Reset confirm key and clear staged cart so future orders start fresh
         session["confirm_key"] = None
+        session.pop("items", None)
+        session.pop("subtotal", None)
+        session.pop("thal_deposit", None)
+        session.pop("total_bill", None)
+        session.pop("order_type", None)
+        session.pop("pickup_time", None)
+        session.pop("notes", None)
 
     return tool_result, new_order_record
 
