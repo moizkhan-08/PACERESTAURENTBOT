@@ -97,6 +97,12 @@ async def test_calculator_math():
     calc_small = await calculate_bill(small_items, order_type="Delivery")
     assert calc_small["subtotal"] == 80.0
     assert calc_small["meets_minimum_delivery"] is False  # Min is 300
+
+    # Non-Sobat items must NEVER incur thal deposit even if thal_count > 0 is passed
+    karahi_items = [{"name": "Chicken Karahi Half", "quantity": 1, "price": 900.0}]
+    calc_karahi = await calculate_bill(karahi_items, order_type="Delivery", thal_count=1)
+    assert calc_karahi["thal_deposit"] == 0.0
+    assert calc_karahi["total_bill"] == 900.0
     print("[PASS] test_calculator_math passed")
 
 

@@ -92,7 +92,7 @@ AGENT_TOOLS = [
                     },
                     "thal_count": {
                         "type": "integer",
-                        "description": "Number of traditional Sobat Thals requested"
+                        "description": "Number of traditional Sobat Thals requested. STRICTLY ONLY for Sobat / Paenda orders. Must be 0 for all other dishes (Karahi, BBQ, Rice, etc.)."
                     }
                 },
                 "required": ["items"]

@@ -193,7 +193,10 @@ async def calculate_bill(
         })
 
     # Sobat Thal deposit (Rs. 300 per thal — refundable when returned to restaurant)
-    thal_deposit = thal_count * 300.0 if thal_count > 0 else 0.0
+    # Thal is STRICTLY and EXCLUSIVELY for Sobat / Paenda items
+    has_sobat = any("sobat" in it.get("name", "").lower() or "paenda" in it.get("name", "").lower() for it in parsed_items)
+    effective_thal_count = thal_count if has_sobat else 0
+    thal_deposit = effective_thal_count * 300.0 if effective_thal_count > 0 else 0.0
     total_bill = subtotal + thal_deposit
 
     is_delivery = order_type.lower() == "delivery"
