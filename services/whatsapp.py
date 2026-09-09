@@ -34,13 +34,19 @@ def format_jid(target: str) -> str:
 class WahaClient:
     def __init__(self):
         self.base_url = settings.WAHA_API_URL.rstrip("/")
-        self.session = settings.WAHA_SESSION
+        self.session = settings.WAHA_SESSION or "Pace"
         self.headers = {
             "X-Api-Key": settings.WAHA_API_KEY,
             "Content-Type": "application/json"
         }
         # Persistent HTTP client for connection pooling
         self._client: Optional[httpx.AsyncClient] = None
+
+    def _resolve_session(self, session: Optional[str] = None) -> str:
+        """Ensures the WAHA instance/session resolves to Pace across all endpoints."""
+        if not session or session.strip().lower() in ("mine", "default"):
+            return self.session or settings.WAHA_SESSION or "Pace"
+        return session
 
     def _get_client(self) -> httpx.AsyncClient:
         """Returns or creates a persistent httpx.AsyncClient with connection pooling."""
@@ -60,8 +66,9 @@ class WahaClient:
     async def send_text(self, to: str, text: str, session: Optional[str] = None) -> dict:
         """Sends a text message via WAHA /api/sendText."""
         chat_id = format_jid(to)
+        active_session = self._resolve_session(session)
         payload = {
-            "session": session or self.session,
+            "session": active_session,
             "chatId": chat_id,
             "text": text
         }
@@ -77,8 +84,9 @@ class WahaClient:
     async def send_image(self, to: str, image_url: str, caption: str = "", session: Optional[str] = None) -> dict:
         """Sends an image with caption via WAHA /api/sendImage."""
         chat_id = format_jid(to)
+        active_session = self._resolve_session(session)
         payload = {
-            "session": session or self.session,
+            "session": active_session,
             "chatId": chat_id,
             "file": {
                 "url": image_url
@@ -97,8 +105,9 @@ class WahaClient:
     async def send_seen(self, chat_id: str, message_id: Optional[str] = None, session: Optional[str] = None):
         """Marks message as seen."""
         try:
+            active_session = self._resolve_session(session)
             payload = {
-                "session": session or self.session,
+                "session": active_session,
                 "chatId": format_jid(chat_id),
             }
             if message_id:
@@ -112,8 +121,9 @@ class WahaClient:
     async def start_typing(self, chat_id: str, session: Optional[str] = None):
         """Shows typing indicator in WhatsApp chat."""
         try:
+            active_session = self._resolve_session(session)
             payload = {
-                "session": session or self.session,
+                "session": active_session,
                 "chatId": format_jid(chat_id),
             }
             client = self._get_client()
@@ -124,8 +134,9 @@ class WahaClient:
     async def stop_typing(self, chat_id: str, session: Optional[str] = None):
         """Clears typing indicator in WhatsApp chat."""
         try:
+            active_session = self._resolve_session(session)
             payload = {
-                "session": session or self.session,
+                "session": active_session,
                 "chatId": format_jid(chat_id),
             }
             client = self._get_client()
@@ -162,9 +173,10 @@ class WahaClient:
             delay = base_delay
 
         delay = round(delay, 2)
-        logger.info("Human typing simulation for %s: typing indicator active for %.2fs", chat_id, delay)
+        active_session = self._resolve_session(session)
+        logger.info("Human typing simulation for %s (session: %s): typing indicator active for %.2fs", chat_id, active_session, delay)
         try:
-            await self.start_typing(chat_id, session=session)
+            await self.start_typing(chat_id, session=active_session)
             await asyncio.sleep(delay)
         except Exception as e:
             logger.debug("Typing delay notice: %s", e)
@@ -175,9 +187,10 @@ class WahaClient:
         Idempotent webhook registration with WAHA.
         Registers the HMAC secret and subscription events.
         """
+        active_session = self._resolve_session(None)
         webhook_url = f"http://pace-bot:{settings.APP_PORT}/webhook/pace-restaurant"
         payload = {
-            "name": self.session,
+            "name": active_session,
             "config": {
                 "webhooks": [
                     {
@@ -193,7 +206,7 @@ class WahaClient:
             client = self._get_client()
             res = await client.post("/api/sessions/start", json=payload, timeout=10.0)
             if res.status_code in (200, 201, 400, 409):
-                logger.info("WAHA session %s started / configured with webhook.", self.session)
+                logger.info("WAHA session %s started / configured with webhook.", active_session)
                 return True
             logger.warning("WAHA webhook registration response: %d %s", res.status_code, res.text)
         except Exception as e:

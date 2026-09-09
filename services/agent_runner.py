@@ -516,7 +516,8 @@ async def process_message(payload: dict):
     if not phone or msg_payload.get("fromMe", False):
         return
 
-    waha_session = payload.get("session") or settings.WAHA_SESSION
+    raw_session = payload.get("session")
+    waha_session = settings.WAHA_SESSION or "Pace" if (not raw_session or str(raw_session).strip().lower() in ("mine", "default")) else raw_session
 
     # Guard: check for in-chat admin commands before bot_active / maintenance checks
     if user_text:
@@ -548,8 +549,6 @@ async def process_message(payload: dict):
     if is_muted == "1":
         logger.info("Customer %s is currently muted. Ignoring.", phone)
         return
-
-    waha_session = payload.get("session") or settings.WAHA_SESSION
 
     # Mark as seen & show typing indicator
     try:

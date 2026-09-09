@@ -60,8 +60,8 @@ async def incoming_waha_webhook(req: Request, background_tasks: BackgroundTasks)
     except Exception:
         return {"status": "invalid_json"}
 
-    event_type = payload.get("event", "message")
-    waha_session = payload.get("session") or settings.WAHA_SESSION
+    raw_session = payload.get("session")
+    waha_session = settings.WAHA_SESSION or "Pace" if (not raw_session or str(raw_session).strip().lower() in ("mine", "default")) else raw_session
     data_payload = payload.get("payload", {})
     msg_id = data_payload.get("id")
     sender = data_payload.get("from")
