@@ -43,7 +43,9 @@ class WahaClient:
         self._client: Optional[httpx.AsyncClient] = None
 
     def _resolve_session(self, session: Optional[str] = None) -> str:
-        """Ensures the WAHA instance/session strictly resolves to Pace across all endpoints."""
+        """Ensures the WAHA instance/session resolves to session if provided, defaulting to Pace."""
+        if session and str(session).strip().lower() not in ("none", ""):
+            return str(session).strip()
         return settings.WAHA_SESSION or "Pace"
 
     def _get_client(self) -> httpx.AsyncClient:
@@ -183,18 +185,18 @@ class WahaClient:
     async def register_webhook(self) -> bool:
         """
         Idempotent webhook registration with WAHA.
-        Registers the HMAC secret and subscription events.
+        Registers the subscription events for the active instance.
         """
         active_session = self._resolve_session(None)
-        webhook_url = f"http://pace-bot:{settings.APP_PORT}/webhook/pace-restaurant"
+        host = settings.VPS_IP if settings.VPS_IP else "pace-bot"
+        webhook_url = f"http://{host}:{settings.APP_PORT}/webhook/pace-restaurant"
         payload = {
             "name": active_session,
             "config": {
                 "webhooks": [
                     {
                         "url": webhook_url,
-                        "events": ["session.status", "message", "messages.upsert", "message.any"],
-                        "hmac": {"key": settings.WAHA_WEBHOOK_SECRET}
+                        "events": ["session.status", "message", "message.any"]
                     }
                 ]
             }
@@ -202,6 +204,11 @@ class WahaClient:
         
         try:
             client = self._get_client()
+            res = await client.put(f"/api/sessions/{active_session}", json=payload, timeout=10.0)
+            if res.status_code in (200, 201):
+                logger.info("WAHA session %s configured with webhook: %s", active_session, webhook_url)
+                return True
+            # Fallback to start if session doesn't exist
             res = await client.post("/api/sessions/start", json=payload, timeout=10.0)
             if res.status_code in (200, 201, 400, 409):
                 logger.info("WAHA session %s started / configured with webhook.", active_session)
