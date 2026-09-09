@@ -517,7 +517,7 @@ async def process_message(payload: dict):
         return
 
     raw_session = payload.get("session")
-    waha_session = settings.WAHA_SESSION or "Pace" if (not raw_session or str(raw_session).strip().lower() in ("mine", "default")) else raw_session
+    waha_session = settings.WAHA_SESSION or "Pace"
 
     # Guard: check for in-chat admin commands before bot_active / maintenance checks
     if user_text:

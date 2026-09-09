@@ -43,10 +43,8 @@ class WahaClient:
         self._client: Optional[httpx.AsyncClient] = None
 
     def _resolve_session(self, session: Optional[str] = None) -> str:
-        """Ensures the WAHA instance/session resolves to Pace across all endpoints."""
-        if not session or session.strip().lower() in ("mine", "default"):
-            return self.session or settings.WAHA_SESSION or "Pace"
-        return session
+        """Ensures the WAHA instance/session strictly resolves to Pace across all endpoints."""
+        return settings.WAHA_SESSION or "Pace"
 
     def _get_client(self) -> httpx.AsyncClient:
         """Returns or creates a persistent httpx.AsyncClient with connection pooling."""
