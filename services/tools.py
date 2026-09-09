@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import random
 import re
 from typing import Optional, Any, Callable
 import httpx
@@ -122,6 +123,9 @@ async def send_menu_images(target: str, session: Optional[str] = None) -> dict:
                 payload={"target": target}
             )
             logger.info("Page 1 menu image dispatched to %s", target)
+            # Dynamic anti-ban spacing between media files (1.2 - 2.5 seconds)
+            if settings.MENU_IMAGE_2:
+                await asyncio.sleep(round(random.uniform(1.2, 2.5), 2))
         if settings.MENU_IMAGE_2:
             await call_with_retry(
                 whatsapp.send_image,
@@ -558,6 +562,8 @@ async def notify_admins_and_kitchen(order_id: str, order_data: dict, session: Op
                 payload={"order_id": order_id, "target": target_jid}
             )
             dispatched.append(label)
+            # Gentle anti-burst jitter between multiple recipients
+            await asyncio.sleep(round(random.uniform(0.8, 1.6), 2))
         except Exception as e:
             logger.error("Failed to notify %s (%s): %s", label, target_jid, e)
 

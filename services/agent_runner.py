@@ -612,13 +612,15 @@ async def process_message(payload: dict):
         sender_jid=sender_jid
     )
 
-    # 5. Send reply via WhatsApp
-    try:
-        await whatsapp.stop_typing(sender_jid, session=waha_session)
-    except Exception:
-        pass
-
+    # 5. Send reply via WhatsApp with dynamic human-like delay (1 - 2 - 3 seconds)
     if final_reply:
+        # Simulate realistic human typing delay (1-3s) to prevent Meta/WhatsApp bot restrictions
+        await whatsapp.dynamic_typing_delay(sender_jid, text=final_reply, session=waha_session)
+        try:
+            await whatsapp.stop_typing(sender_jid, session=waha_session)
+        except Exception:
+            pass
+
         try:
             await whatsapp.send_text(sender_jid, final_reply, session=waha_session)
             logger.info("Outbound WhatsApp reply dispatched to %s via session %s", sender_jid, waha_session)
@@ -630,6 +632,11 @@ async def process_message(payload: dict):
                     logger.info("Outbound WhatsApp reply dispatched to fallback JID %s", real_phone_jid)
                 except Exception as e2:
                     logger.error("Failed to dispatch to fallback JID %s: %s", real_phone_jid, e2)
+    else:
+        try:
+            await whatsapp.stop_typing(sender_jid, session=waha_session)
+        except Exception:
+            pass
 
     # 6. Update session history in Redis
     history = session.get("history", [])

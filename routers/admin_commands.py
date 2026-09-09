@@ -295,6 +295,7 @@ async def handle_admin_command(
     # WhatsApp reply
     if send_whatsapp:
         try:
+            await whatsapp.dynamic_typing_delay(sender_jid, text=response_msg, session=session, min_sec=1.0, max_sec=2.0)
             await whatsapp.send_text(sender_jid, response_msg, session=session)
         except Exception as e:
             logger.warning("Could not send admin reply to %s: %s", sender_jid, e)

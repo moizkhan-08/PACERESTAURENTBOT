@@ -59,6 +59,10 @@ class Settings(BaseSettings):
     ORDER_CONFIRM_TIMEOUT_MIN: int = Field(default=10)
     WAHA_ENABLED: bool = Field(default=True)
 
+    # ── Anti-Ban & Humanization Delays ──
+    DYNAMIC_DELAY_MIN: float = Field(default=1.0, description="Minimum dynamic typing delay in seconds")
+    DYNAMIC_DELAY_MAX: float = Field(default=3.0, description="Maximum dynamic typing delay in seconds")
+
     # ── Admin API Security ──
     ADMIN_API_KEY: str = Field(default="pace-admin-secret-change-me")
 

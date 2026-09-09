@@ -1,6 +1,8 @@
+import asyncio
 import logging
-import httpx
+import random
 from typing import Optional
+import httpx
 from config import settings
 
 logger = logging.getLogger("whatsapp")
@@ -130,6 +132,43 @@ class WahaClient:
             await client.post("/api/stopTyping", json=payload, timeout=5.0)
         except Exception:
             pass
+
+    async def dynamic_typing_delay(
+        self,
+        chat_id: str,
+        text: str = "",
+        session: Optional[str] = None,
+        min_sec: Optional[float] = None,
+        max_sec: Optional[float] = None
+    ) -> float:
+        """
+        Simulates realistic human typing behavior with a dynamic 1-3 second delay.
+        Activates the WhatsApp 'typing...' indicator while waiting to mimic natural
+        keystroke pacing and prevent automated bot detection or Meta account restrictions.
+        """
+        min_s = min_sec if min_sec is not None else settings.DYNAMIC_DELAY_MIN
+        max_s = max_sec if max_sec is not None else settings.DYNAMIC_DELAY_MAX
+
+        if max_s <= 0:
+            return 0.0
+
+        # Random delay jitter between min_s (1.0s) and max_s (3.0s)
+        base_delay = random.uniform(min_s, max_s)
+        if text:
+            # Scaled slightly based on message length (longer messages get realistic typing time)
+            length_factor = min(len(text) / 250.0, 0.7)
+            delay = min(max_s, max(min_s, base_delay + length_factor * 0.5))
+        else:
+            delay = base_delay
+
+        delay = round(delay, 2)
+        logger.info("Human typing simulation for %s: typing indicator active for %.2fs", chat_id, delay)
+        try:
+            await self.start_typing(chat_id, session=session)
+            await asyncio.sleep(delay)
+        except Exception as e:
+            logger.debug("Typing delay notice: %s", e)
+        return delay
 
     async def register_webhook(self) -> bool:
         """
