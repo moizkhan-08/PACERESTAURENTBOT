@@ -16,10 +16,13 @@ except ImportError:
 
 from config import settings
 
+from unittest.mock import AsyncMock, patch
+
 from services.sanitize import sanitize_free_text
 from services.access_control import is_number_allowed, normalize_phone
 from services.hours import get_hours_info
-from services.tools import calculate_bill
+from services.tools import calculate_bill, save_order_record
+from services.agent_runner import execute_tool_call
 from routers.webhook import verify_signature
 
 
@@ -113,6 +116,103 @@ def test_webhook_signature():
     assert verify_signature(payload, sig) is True
     assert verify_signature(payload, "invalid_sig") is False
     print("[PASS] test_webhook_signature passed")
+
+
+@pytest.mark.anyio
+async def test_save_order_record_math_protection():
+    # Simulate 3x Chicken Sobat Leg with Thal (1,440 + 300 = 1,740)
+    items = [
+        {
+            "name": "Chicken Sobat (Leg)",
+            "quantity": 3,
+            "price": 480.0,
+            "unit_price": 480.0,
+            "line_total": 1440.0,
+            "variant": "Leg"
+        }
+    ]
+    session = {
+        "phone": "923306874242",
+        "name": "Moiz",
+        "order_type": "Delivery",
+        "address": "Cantt DI Khan",
+        "items": items,
+        "subtotal": 1440.0,
+        "thal_deposit": 300.0,
+        "total_bill": 1740.0,
+        "confirm_key": "TEST-KEY-1"
+    }
+
+    with patch("services.db.db.save_order", new_callable=AsyncMock) as mock_save, \
+         patch("services.db.db.upsert_customer_profile", new_callable=AsyncMock) as mock_profile:
+        mock_save.return_value = {"order_id": "PACE-1001", "duplicate": False}
+
+        # Simulate LLM erroneously passing total_bill=4320 and price=1440
+        hallucinated_items = [{"name": "Chicken Sobat (Leg)", "quantity": 3, "price": 1440.0}]
+        res = await save_order_record(
+            session=session,
+            items=hallucinated_items,
+            total_bill=4320.0
+        )
+
+        assert res["total_bill"] == 1740.0
+        assert res["order_payload"]["subtotal"] == 1440.0
+        assert res["order_payload"]["thal_deposit"] == 300.0
+        assert res["order_payload"]["total_bill"] == 1740.0
+        assert "Rs. 1,440" in res["summary"]
+        assert "4,320" not in res["summary"]
+        assert "Thal Deposit" in res["summary"]
+
+
+@pytest.mark.anyio
+async def test_execute_tool_call_save_and_notify_protection():
+    session = {
+        "phone": "923306874242",
+        "name": "Moiz",
+        "order_type": "Delivery",
+        "address": "Cantt DI Khan",
+        "items": [
+            {
+                "name": "Chicken Sobat (Leg)",
+                "quantity": 3,
+                "price": 480.0,
+                "unit_price": 480.0,
+                "line_total": 1440.0,
+                "variant": "Leg"
+            }
+        ],
+        "subtotal": 1440.0,
+        "thal_deposit": 300.0,
+        "total_bill": 1740.0,
+        "confirm_key": "TEST-KEY-2"
+    }
+
+    with patch("services.db.db.save_order", new_callable=AsyncMock) as mock_save, \
+         patch("services.db.db.upsert_customer_profile", new_callable=AsyncMock):
+        mock_save.return_value = {"order_id": "PACE-1002", "duplicate": False}
+
+        # 1. execute_tool_call for save_order with hallucinated 4320
+        save_res, order_rec = await execute_tool_call(
+            tool_name="save_order",
+            tool_args={"customer_name": "Moiz", "order_type": "Delivery", "total_bill": 4320.0},
+            session=session,
+            phone="923306874242",
+            dispatch_mode="simulator"
+        )
+        assert save_res["total_bill"] == 1740.0
+        assert order_rec["total_bill"] == 1740.0
+
+        # 2. execute_tool_call for notify_admins_and_kitchen with hallucinated 4320
+        notify_res, _ = await execute_tool_call(
+            tool_name="notify_admins_and_kitchen",
+            tool_args={"order_id": "PACE-1002", "total_bill": 4320.0},
+            session=session,
+            phone="923306874242",
+            dispatch_mode="simulator",
+            latest_order_record=order_rec
+        )
+        assert notify_res["total_bill"] == 1740.0
+        assert "1,740" in notify_res["message"]
 
 
 if __name__ == "__main__":

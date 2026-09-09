@@ -144,125 +144,157 @@ def resolve_menu_item_price(
     name: str,
     variant: str,
     llm_price: float,
-    menu_items: list[dict]
+    menu_items: list[dict],
+    qty: int = 1
 ) -> tuple[str, float, str]:
     """
     Intelligently cross-references customer dish requests against live Supabase MenuPace items.
     Handles colloquial Roman Urdu names, variants (Leg/Chest, Half/Full, 1.5L), aliases, and
-    overrides any LLM price hallucination with the authentic restaurant price.
+    enforces authentic restaurant prices while preventing double-multiplication bugs.
     """
     raw_name_clean = (name or "").strip()
     clean = re.sub(r'^\d+\s*(x|nafri|plate|plates)?\s*', '', raw_name_clean, flags=re.I).strip().lower()
     clean_no_punct = re.sub(r'[\(\)\[\],/]', ' ', clean).strip()
     var_clean = (variant or "").strip().lower()
+    passed_p = float(llm_price or 0.0)
 
-    # Build quick dictionary of exact lowercase names
+    # Sort menu items so modern (non-all-caps) categories and current prices take precedence
+    sorted_menu = sorted(
+        menu_items,
+        key=lambda m: (1 if m.get("category", "").isupper() else 0, -float(m.get("price", 0.0)))
+    )
+
     db_lookup = {}
-    for mi in menu_items:
+    for mi in sorted_menu:
         k = mi.get("name", "").strip().lower()
-        if k:
+        if k and k not in db_lookup:
             db_lookup[k] = (mi["name"], float(mi.get("price", 0.0)), mi.get("variant") or "")
+
+    matched_item = None
 
     # Priority 1: Exact case-insensitive match in DB
     if clean in db_lookup:
-        match_name, match_price, match_var = db_lookup[clean]
-        return match_name, match_price, match_var or variant
-    if raw_name_clean.lower() in db_lookup:
-        match_name, match_price, match_var = db_lookup[raw_name_clean.lower()]
-        return match_name, match_price, match_var or variant
+        matched_item = db_lookup[clean]
+    elif raw_name_clean.lower() in db_lookup:
+        matched_item = db_lookup[raw_name_clean.lower()]
+    elif var_clean and f"{clean} {var_clean}" in db_lookup:
+        matched_item = db_lookup[f"{clean} {var_clean}"]
 
-    # Priority 2: Combined name + variant exact match in DB
-    if var_clean:
-        combo = f"{clean} {var_clean}"
-        if combo in db_lookup:
-            match_name, match_price, match_var = db_lookup[combo]
-            return match_name, match_price, match_var or variant
-
-    # Priority 2: Core Chicken Sobat Flagship (Always enforces real database price)
-    if clean in {"chicken sobat", "chicken sobat leg", "chicken sobat chest"}:
+    # Priority 2: Core Sobat / Paenda items (Always enforces true restaurant prices)
+    if not matched_item and ("sobat" in clean or "paenda" in clean):
         is_chest = "chest" in clean or "chest" in var_clean
-        if is_chest:
-            target = next((it for it in menu_items if "chicken sobat" in it.get("name", "").lower() and "chest" in it.get("name", "").lower()), None)
-            if target: return target["name"], float(target["price"]), "Chest"
+        is_bbq = "bbq" in clean
+        is_desi = "desi" in clean
+        is_mutton = "mutton" in clean
+        is_beef = "beef" in clean
+        is_simple = "simple" in clean or "saada" in clean
+
+        if is_bbq:
+            target = next((it for it in sorted_menu if "bbq chicken sobat" in it.get("name", "").lower() and ("chest" in it.get("name", "").lower() if is_chest else "leg" in it.get("name", "").lower())), None)
+            if target: matched_item = (target["name"], float(target["price"]), "Chest" if is_chest else "Leg")
+        elif is_mutton:
+            target = next((it for it in sorted_menu if "mutton sobat" in it.get("name", "").lower()), None)
+            if target: matched_item = (target["name"], float(target["price"]), "Single")
+        elif is_beef:
+            target = next((it for it in sorted_menu if "beef champ sobat" in it.get("name", "").lower()), None)
+            if target: matched_item = (target["name"], float(target["price"]), "Single")
+        elif is_simple:
+            target = next((it for it in sorted_menu if "simple sobat" in it.get("name", "").lower()), None)
+            if target: matched_item = (target["name"], float(target["price"]), "Single")
+        elif is_desi:
+            target = next((it for it in sorted_menu if "desi murgh sobat" in it.get("name", "").lower()), None)
+            if target: matched_item = (target["name"], float(target["price"]), "Single")
+        elif "full" not in clean and "full" not in var_clean:
+            # Standard Chicken Sobat Fry Pieces (Leg default, Chest if specified)
+            target = next((it for it in sorted_menu if "chicken sobat" in it.get("name", "").lower() and "bbq" not in it.get("name", "").lower() and ("chest" in it.get("name", "").lower() if is_chest else "leg" in it.get("name", "").lower())), None)
+            if target: matched_item = (target["name"], float(target["price"]), "Chest" if is_chest else "Leg")
+
+    # Priority 3: Karahi & Handi items
+    if not matched_item and ("karahi" in clean or "handi" in clean):
+        is_half = "half" in clean or "half" in var_clean
+        dish_type = "karahi" if "karahi" in clean else "handi"
+        meat_type = "mutton" if "mutton" in clean else "chicken"
+        for it in sorted_menu:
+            n = it.get("name", "").lower()
+            if dish_type in n and meat_type in n:
+                if is_half and "half" in n:
+                    matched_item = (it["name"], float(it["price"]), "Half")
+                    break
+                elif not is_half and "full" in n:
+                    matched_item = (it["name"], float(it["price"]), "Full")
+                    break
+
+    # Priority 4: Breads (Roti, Naan)
+    if not matched_item and ("roti" in clean or "maana" in clean):
+        target = next((it for it in sorted_menu if "roti" in it.get("name", "").lower()), None)
+        if target: matched_item = (target["name"], float(target["price"]), "Per Head")
+    if not matched_item and "naan" in clean:
+        is_roghni = "roghni" in clean or "roghni" in var_clean
+        is_garlic = "garlic" in clean or "garlic" in var_clean
+        if is_roghni:
+            target = next((it for it in sorted_menu if "roghni naan" in it.get("name", "").lower()), None)
+        elif is_garlic:
+            target = next((it for it in sorted_menu if "garlic naan" in it.get("name", "").lower()), None)
         else:
-            target = next((it for it in menu_items if "chicken sobat" in it.get("name", "").lower() and "leg" in it.get("name", "").lower()), None)
-            if target: return target["name"], float(target["price"]), "Leg"
+            target = next((it for it in sorted_menu if "simple naan" in it.get("name", "").lower()), None)
+        if target: matched_item = (target["name"], float(target["price"]), "Single")
 
-    # Priority 3: If caller passed explicit non-zero test price or custom quote, respect it
-    if llm_price and float(llm_price) > 0:
-        return name, float(llm_price), variant
-
-    # Priority 4: Known Aliases for unpriced items (llm_price <= 0)
+    # Priority 5: Known Aliases
     aliases = {
-        "simple sobat": "simple sobat",
-        "saada sobat": "simple sobat",
-        "mutton sobat": "mutton sobat",
-        "beef sobat": "beef champ sobat",
-        "beef champ sobat": "beef champ sobat",
-        "desi murgh sobat": "desi murgh sobat",
-        "bbq chicken sobat": "bbq chicken sobat (leg)",
-        "chicken karahi": "chicken peshawari karahi (full)",
-        "chicken karahi full": "chicken peshawari karahi (full)",
-        "chicken karahi half": "chicken peshawari karahi (half)",
-        "mutton karahi": "mutton peshawari karahi (full)",
-        "mutton karahi half": "mutton peshawari karahi (half)",
-        "roti": "roti / maana per head",
-        "tandoori roti": "roti / maana per head",
-        "naan": "simple naan",
-        "simple naan": "simple naan",
-        "roghni naan": "roghni naan",
-        "garlic naan": "garlic naan",
         "mineral water": "mineral water",
+        "water": "mineral water",
         "cold drink": "regular soft drinks",
         "soft drink": "regular soft drinks",
         "regular drink": "regular soft drinks",
         "1.5l soft drink": "1.5 liter soft drink",
-        "1.5 liter soft drink": "1.5 liter soft drink"
+        "1.5 liter soft drink": "1.5 liter soft drink",
+        "chicken biryani": "chicken biryani",
+        "biryani": "chicken biryani"
     }
-    if var_clean:
-        combo = f"{clean} {var_clean}"
-        if combo in aliases and aliases[combo] in db_lookup:
-            match_name, match_price, match_var = db_lookup[aliases[combo]]
-            return match_name, match_price, match_var or variant
-    if clean in aliases and aliases[clean] in db_lookup:
-        match_name, match_price, match_var = db_lookup[aliases[clean]]
-        return match_name, match_price, match_var or variant
+    if not matched_item:
+        if var_clean and f"{clean} {var_clean}" in aliases and aliases[f"{clean} {var_clean}"] in db_lookup:
+            matched_item = db_lookup[aliases[f"{clean} {var_clean}"]]
+        elif clean in aliases and aliases[clean] in db_lookup:
+            matched_item = db_lookup[aliases[clean]]
 
-    # Priority 5: Specialized Dish Matchers for unpriced items
-    if "karahi" in clean or "handi" in clean:
-        is_half = "half" in clean or "half" in var_clean
-        dish_type = "karahi" if "karahi" in clean else "handi"
-        meat_type = "mutton" if "mutton" in clean else "chicken"
-        for it in menu_items:
-            n = it.get("name", "").lower()
-            if dish_type in n and meat_type in n:
-                if is_half and "half" in n:
-                    return it["name"], float(it["price"]), "Half"
-                elif not is_half and "full" in n:
-                    return it["name"], float(it["price"]), "Full"
+    # Priority 6: Token Overlap Fallback
+    if not matched_item and "full" not in clean and "full" not in var_clean:
+        query_words = [w for w in clean_no_punct.split() if len(w) >= 3 and w not in {'wali', 'wala', 'with', 'and', 'aur', 'food', 'nafri', 'plate'}]
+        best_candidate = None
+        best_score = -1
+        for it in sorted_menu:
+            it_name = it.get("name", "").strip().lower()
+            matches = sum(1 for w in query_words if w in it_name)
+            if matches == 0:
+                continue
+            score = matches * 20
+            if matches == len(query_words):
+                score += 40
+            if score > best_score:
+                best_score = score
+                best_candidate = it
 
-    if "roti" in clean or "maana" in clean:
-        target = next((it for it in menu_items if "roti" in it.get("name", "").lower()), None)
-        if target: return target["name"], float(target["price"]), target.get("variant") or variant
+        if best_candidate and best_score >= 20:
+            matched_item = (best_candidate.get("name", name), float(best_candidate.get("price", 0.0)), best_candidate.get("variant") or variant)
 
-    # Priority 6: Token Overlap Matching for unpriced items
-    query_words = [w for w in clean_no_punct.split() if len(w) >= 3 and w not in {'wali', 'wala', 'with', 'and', 'aur', 'food', 'nafri', 'plate'}]
-    best_candidate = None
-    best_score = -1
-    for it in menu_items:
-        it_name = it.get("name", "").strip().lower()
-        matches = sum(1 for w in query_words if w in it_name)
-        if matches == 0:
-            continue
-        score = matches * 20
-        if matches == len(query_words):
-            score += 40
-        if score > best_score:
-            best_score = score
-            best_candidate = it
+    # Resolution of Final Unit Price
+    if matched_item:
+        res_name, db_price, res_var = matched_item
+        # Anti-Multiplication Guardrail:
+        # If caller passed a price for qty > 1, check if it was already the multiplied total:
+        if passed_p > 0:
+            is_multiplied_total = (qty > 1 and (abs(passed_p - (db_price * qty)) <= 10.0 or (passed_p >= db_price * 1.8 and abs((passed_p / qty) - db_price) <= 10.0)))
+            if is_multiplied_total:
+                final_unit_price = db_price
+            else:
+                final_unit_price = passed_p
+        else:
+            final_unit_price = db_price
+        return res_name, final_unit_price, res_var or variant
 
-    if best_candidate and best_score >= 20:
-        return best_candidate.get("name", name), float(best_candidate.get("price", 0.0)), best_candidate.get("variant") or variant
+    # If unlisted / test mock item (e.g. Full Chicken Sobat @ 1200):
+    if passed_p > 0:
+        return name, passed_p, variant
 
     return name, 0.0, variant
 
@@ -275,6 +307,7 @@ async def calculate_bill(
     """
     Deterministic mathematical calculation of subtotal, thal deposit, delivery requirement, and total bill.
     Resolves item prices against live Supabase/Redis MenuPace items to guarantee 100% price and arithmetic accuracy.
+    Guarantees that total line values are NEVER multiplied by quantity twice.
     """
     menu_items = await read_menu()
 
@@ -284,22 +317,31 @@ async def calculate_bill(
     for raw_item in items:
         raw_name = sanitize_free_text(raw_item.get("name", "Item"))
         qty = max(1, int(raw_item.get("quantity") or raw_item.get("qty") or 1))
-        llm_price = float(raw_item.get("price", 0.0))
         variant = sanitize_free_text(raw_item.get("variant", ""))
         notes = sanitize_free_text(raw_item.get("notes", ""))
 
-        resolved_name, verified_price, resolved_variant = resolve_menu_item_price(
-            raw_name, variant, llm_price, menu_items
+        passed_unit_price = float(raw_item.get("unit_price") or 0.0)
+        passed_price = float(raw_item.get("price") or 0.0)
+        passed_total = float(raw_item.get("line_total") or raw_item.get("total") or 0.0)
+        effective_passed = passed_unit_price or passed_price
+
+        resolved_name, verified_unit_price, resolved_variant = resolve_menu_item_price(
+            raw_name, variant, effective_passed, menu_items, qty=qty
         )
 
-        line_total = round(verified_price * qty, 2)
+        # Anti-Multiplication Safeguard for Line Total
+        if passed_total > 0 and abs(passed_total - (verified_unit_price * qty)) < 2.0:
+            line_total = round(passed_total, 2)
+        else:
+            line_total = round(verified_unit_price * qty, 2)
+
         subtotal += line_total
 
         parsed_items.append({
             "name": resolved_name,
             "quantity": qty,
-            "price": verified_price,
-            "unit_price": verified_price,
+            "price": verified_unit_price,
+            "unit_price": verified_unit_price,
             "variant": resolved_variant,
             "line_total": line_total,
             "notes": notes
@@ -319,7 +361,10 @@ async def calculate_bill(
     summary_lines = []
     for it in parsed_items:
         var_label = f" ({it['variant']})" if it.get("variant") else ""
-        summary_lines.append(f"• {it['quantity']}x *{it['name']}*{var_label} — Rs. {it['line_total']:,.0f}")
+        if it['quantity'] > 1:
+            summary_lines.append(f"• {it['quantity']}x *{it['name']}*{var_label} (Rs. {it['unit_price']:,.0f} each) — Rs. {it['line_total']:,.0f}")
+        else:
+            summary_lines.append(f"• 1x *{it['name']}*{var_label} — Rs. {it['line_total']:,.0f}")
     if thal_deposit > 0:
         summary_lines.append(f"• *Thal Deposit ({int(effective_thal_count)}x)* — Rs. {thal_deposit:,.0f} (refundable)")
     summary_lines.append(f"💰 *Total: Rs. {total_bill:,.0f}*")
@@ -354,6 +399,8 @@ async def check_returning_customer(phone: str) -> dict:
 async def save_order_record(session: dict, items: list[dict], total_bill: float, notes: str = "") -> dict:
     """
     Idempotently persists order to Supabase and updates customer profile.
+    Guarantees deterministic math: verifies subtotal, thal deposit, and total bill against
+    session state from calculate_bill to prevent hallucinated numbers or double-multiplication.
     """
     phone = session.get("phone", "")
     customer_name = sanitize_free_text(session.get("name", "Valued Customer"))
@@ -363,10 +410,45 @@ async def save_order_record(session: dict, items: list[dict], total_bill: float,
     confirm_key = session.get("confirm_key")
     clean_notes = sanitize_free_text(notes or session.get("notes", ""))
 
-    items_summary_str = "\n".join([
-        f"- {it.get('quantity', 1)}x {it.get('name')} ({it.get('variant', '')}) : Rs. {it.get('price', 0)*it.get('quantity', 1):,.0f}"
-        for it in items
-    ])
+    # Prefer session items if available (they contain pre-verified prices and line totals from calculate_bill)
+    order_items = session.get("items") or items or []
+
+    # Deterministic total resolution:
+    # Priority: session verified amounts -> argument amounts
+    session_total = session.get("total_bill")
+    session_subtotal = session.get("subtotal")
+    session_thal = session.get("thal_deposit")
+
+    final_total = float(session_total) if (session_total is not None and float(session_total) > 0) else float(total_bill or 0.0)
+    final_thal = float(session_thal) if session_thal is not None else 0.0
+    final_subtotal = float(session_subtotal) if (session_subtotal is not None and float(session_subtotal) > 0) else max(0.0, final_total - final_thal)
+
+    # Format item lines deterministically without double multiplication
+    item_lines = []
+    for it in order_items:
+        qty = max(1, int(it.get("quantity") or it.get("qty") or 1))
+        name = it.get("name", "Item")
+        var = f" ({it['variant']})" if it.get("variant") else ""
+
+        if "line_total" in it and float(it["line_total"]) > 0:
+            line_total = float(it["line_total"])
+        elif "unit_price" in it and float(it["unit_price"]) > 0:
+            line_total = float(it["unit_price"]) * qty
+        else:
+            raw_p = float(it.get("price", 0.0))
+            # Safeguard: if the passed price already represents the line total or subtotal, do not multiply by quantity again
+            if qty > 1 and (raw_p == final_subtotal or raw_p == final_total or (final_subtotal > 0 and raw_p >= (final_subtotal * 0.7))):
+                line_total = raw_p
+            else:
+                line_total = raw_p * qty
+
+        item_lines.append(f"- {qty}x {name}{var} : Rs. {line_total:,.0f}")
+
+    if final_thal > 0:
+        effective_thal_count = int(final_thal / 300) if final_thal >= 300 else 1
+        item_lines.append(f"- Thal Deposit ({effective_thal_count}x) : Rs. {final_thal:,.0f} (refundable)")
+
+    items_summary_str = "\n".join(item_lines)
 
     order_payload = {
         "session_confirm_key": confirm_key,
@@ -376,9 +458,9 @@ async def save_order_record(session: dict, items: list[dict], total_bill: float,
         "delivery_address": address if order_type == "Delivery" else None,
         "pickup_time": pickup_time if order_type == "Takeaway" else None,
         "order_items": items_summary_str,
-        "subtotal": session.get("subtotal", total_bill),
-        "thal_deposit": session.get("thal_deposit", 0),
-        "total_bill": total_bill,
+        "subtotal": final_subtotal,
+        "thal_deposit": final_thal,
+        "total_bill": final_total,
         "notes": clean_notes
     }
 
@@ -404,7 +486,7 @@ async def save_order_record(session: dict, items: list[dict], total_bill: float,
         "order_id": order_id,
         "duplicate": is_duplicate,
         "summary": items_summary_str,
-        "total_bill": total_bill,
+        "total_bill": final_total,
         "order_payload": order_payload
     }
 

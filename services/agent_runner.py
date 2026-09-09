@@ -73,16 +73,18 @@ AGENT_TOOLS = [
                 "properties": {
                     "items": {
                         "type": "array",
+                        "description": "List of dishes to calculate. Provide dish name and quantity. Do NOT calculate or multiply totals yourself.",
                         "items": {
                             "type": "object",
                             "properties": {
-                                "name": {"type": "string"},
-                                "quantity": {"type": "integer"},
-                                "price": {"type": "number"},
-                                "variant": {"type": "string"},
+                                "name": {"type": "string", "description": "Name of dish from menu (e.g. Chicken Sobat, Chicken Karahi, Roti)"},
+                                "quantity": {"type": "integer", "description": "Number of items or nafri"},
+                                "unit_price": {"type": "number", "description": "Optional unit price of 1 single item. NEVER pass multiplied total."},
+                                "price": {"type": "number", "description": "Optional unit price of 1 single item. NEVER pass multiplied total."},
+                                "variant": {"type": "string", "description": "Variant (Leg, Chest, Half, Full, etc.)"},
                                 "notes": {"type": "string"}
                             },
-                            "required": ["name", "price"]
+                            "required": ["name"]
                         }
                     },
                     "order_type": {
@@ -109,17 +111,18 @@ AGENT_TOOLS = [
                 "properties": {
                     "items": {
                         "type": "array",
+                        "description": "Confirmed items list. Price must be the UNIT price of a single item (e.g. 480 for 1 Sobat, NOT 1440).",
                         "items": {
                             "type": "object",
                             "properties": {
                                 "name": {"type": "string"},
                                 "quantity": {"type": "integer"},
-                                "price": {"type": "number"},
+                                "price": {"type": "number", "description": "Unit price of 1 item"},
                                 "variant": {"type": "string"}
                             }
                         }
                     },
-                    "total_bill": {"type": "number"},
+                    "total_bill": {"type": "number", "description": "EXACT total bill from calculate_bill. Do NOT recalculate or multiply."},
                     "customer_name": {"type": "string"},
                     "order_type": {"type": "string", "enum": ["Delivery", "Takeaway"]},
                     "delivery_address": {"type": "string"},
@@ -141,7 +144,7 @@ AGENT_TOOLS = [
                     "order_id": {"type": "string"},
                     "customer_name": {"type": "string"},
                     "order_type": {"type": "string"},
-                    "total_bill": {"type": "number"},
+                    "total_bill": {"type": "number", "description": "EXACT total bill from calculate_bill / save_order."},
                     "delivery_address": {"type": "string"},
                     "pickup_time": {"type": "string"},
                     "notes": {"type": "string"}
@@ -226,8 +229,9 @@ async def execute_tool_call(
             session["confirm_key"] = generate_confirm_key(phone)
 
     elif tool_name == "save_order":
-        items = tool_args.get("items") or session.get("items", [])
-        total_bill = tool_args.get("total_bill") or session.get("total_bill", 0)
+        # Deterministic precedence: session items & total_bill have verified math from calculate_bill
+        items = session.get("items") or tool_args.get("items", [])
+        total_bill = session.get("total_bill") or tool_args.get("total_bill", 0)
         notes = tool_args.get("notes", "")
         
         if tool_args.get("customer_name"):
@@ -264,28 +268,42 @@ async def execute_tool_call(
     elif tool_name == "notify_admins_and_kitchen":
         order_id = tool_args.get("order_id", "PACE-CONFIRMED")
         
-        if dispatch_mode == "whatsapp":
-            items_fallback = "\n".join([
+        # Priority for total_bill: latest_order_record -> session -> tool_args
+        verified_total = 0.0
+        if latest_order_record and latest_order_record.get("total_bill"):
+            verified_total = float(latest_order_record["total_bill"])
+        elif session.get("total_bill"):
+            verified_total = float(session["total_bill"])
+        elif tool_args.get("total_bill"):
+            verified_total = float(tool_args["total_bill"])
+
+        items_summary = (latest_order_record.get("summary") if latest_order_record else None)
+        if not items_summary:
+            items_summary = "\n".join([
                 f"- {it.get('quantity', 1)}x {it.get('name')} ({it.get('variant', '')})"
                 for it in session.get("items", [])
             ]) if session.get("items") else "Items"
             
-            order_summary_data = {
-                "customer_name": tool_args.get("customer_name") or session.get("name"),
-                "phone_number": phone,
-                "order_type": tool_args.get("order_type") or session.get("order_type"),
-                "delivery_address": tool_args.get("delivery_address") or session.get("address"),
-                "pickup_time": tool_args.get("pickup_time") or session.get("pickup_time"),
-                "order_items": (latest_order_record.get("summary") if latest_order_record else None) or items_fallback,
-                "total_bill": tool_args.get("total_bill") or session.get("total_bill", 0),
-                "notes": tool_args.get("notes") or session.get("notes", "")
-            }
+        order_summary_data = {
+            "customer_name": tool_args.get("customer_name") or session.get("name"),
+            "phone_number": phone,
+            "order_type": tool_args.get("order_type") or session.get("order_type"),
+            "delivery_address": tool_args.get("delivery_address") or session.get("address"),
+            "pickup_time": tool_args.get("pickup_time") or session.get("pickup_time"),
+            "order_items": items_summary,
+            "total_bill": verified_total,
+            "notes": tool_args.get("notes") or session.get("notes", "")
+        }
+
+        if dispatch_mode == "whatsapp":
             tool_result = await notify_admins_and_kitchen(order_id, order_summary_data, session=waha_session)
         else:
             tool_result = {
                 "status": "simulated_dispatch",
                 "order_id": order_id,
-                "message": f"Order {order_id} alert simulated for kitchen & admin."
+                "total_bill": verified_total,
+                "order_items": items_summary,
+                "message": f"Order {order_id} alert simulated for kitchen & admin (Total: Rs. {verified_total:,.0f})."
             }
         # Reset confirm key and clear staged cart so future orders start fresh
         session["confirm_key"] = None
@@ -349,7 +367,9 @@ async def run_agent_loop(
     if session.get("order_type"):
         context_note += f" [Order Stage: {session['order_type']} in progress]"
     if session.get("total_bill"):
-        context_note += f" [Staged Bill: Rs. {session['total_bill']}]"
+        sub_str = f", Subtotal: Rs. {session['subtotal']:,.0f}" if session.get("subtotal") else ""
+        thal_str = f", Thal Deposit: Rs. {session['thal_deposit']:,.0f}" if session.get("thal_deposit") else ""
+        context_note += f" [Verified Bill: Rs. {session['total_bill']:,.0f}{sub_str}{thal_str} - DO NOT RECALCULATE OR MULTIPLY]"
     messages.append({"role": "system", "content": context_note})
 
     # Add past turn history (last 12 turns for better order flow context)
