@@ -67,7 +67,7 @@ AGENT_TOOLS = [
         "type": "function",
         "function": {
             "name": "calculate_bill",
-            "description": "Deterministically calculates total bill, items breakdown, thal deposit, and verifies minimum delivery order.",
+            "description": "Deterministically calculates total bill, items breakdown, thal deposit, and verifies minimum delivery order. STRICTLY for immediate live orders during open hours. DO NOT call for advance delivery or advance takeaway orders.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -105,7 +105,7 @@ AGENT_TOOLS = [
         "type": "function",
         "function": {
             "name": "save_order",
-            "description": "Idempotently saves confirmed customer order into Supabase database.",
+            "description": "Idempotently saves confirmed customer order into Supabase database. STRICTLY for immediate live orders during open hours. DO NOT call for advance delivery or advance takeaway orders.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -137,13 +137,13 @@ AGENT_TOOLS = [
         "type": "function",
         "function": {
             "name": "notify_admins_and_kitchen",
-            "description": "Dispatches real-time WhatsApp alert notifications to Kitchen, Admins, and Admin WhatsApp Group.",
+            "description": "Dispatches real-time WhatsApp alert notifications to Kitchen, Admins, and Admin WhatsApp Group. MANDATORY FOR BOTH TAKEAWAY AND DELIVERY ORDERS immediately upon customer confirmation.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "order_id": {"type": "string"},
                     "customer_name": {"type": "string"},
-                    "order_type": {"type": "string"},
+                    "order_type": {"type": "string", "enum": ["Delivery", "Takeaway"]},
                     "total_bill": {"type": "number", "description": "EXACT total bill from calculate_bill / save_order."},
                     "delivery_address": {"type": "string"},
                     "pickup_time": {"type": "string"},
@@ -284,15 +284,16 @@ async def execute_tool_call(
                 for it in session.get("items", [])
             ]) if session.get("items") else "Items"
             
+        saved_payload = latest_order_record.get("order_payload", {}) if latest_order_record else {}
         order_summary_data = {
-            "customer_name": tool_args.get("customer_name") or session.get("name"),
+            "customer_name": saved_payload.get("customer_name") or tool_args.get("customer_name") or session.get("name"),
             "phone_number": phone,
-            "order_type": tool_args.get("order_type") or session.get("order_type"),
-            "delivery_address": tool_args.get("delivery_address") or session.get("address"),
-            "pickup_time": tool_args.get("pickup_time") or session.get("pickup_time"),
+            "order_type": saved_payload.get("order_type") or tool_args.get("order_type") or session.get("order_type", "Takeaway"),
+            "delivery_address": saved_payload.get("delivery_address") or tool_args.get("delivery_address") or session.get("address"),
+            "pickup_time": saved_payload.get("pickup_time") or tool_args.get("pickup_time") or session.get("pickup_time"),
             "order_items": items_summary,
             "total_bill": verified_total,
-            "notes": tool_args.get("notes") or session.get("notes", "")
+            "notes": saved_payload.get("notes") or tool_args.get("notes") or session.get("notes", "")
         }
 
         if dispatch_mode == "whatsapp":
@@ -401,16 +402,29 @@ async def run_agent_loop(
     should_send_menu = force_menu or (is_first_interaction and is_greeting)
 
     if is_greeting and is_first_interaction:
-        messages.append({
-            "role": "system",
-            "content": (
-                "MANDATORY GREETING INSTRUCTION:\n"
-                "1) Greet warmly (e.g. 'Assalam-o-Alaikum! 🌟').\n"
-                "2) Welcome to Pace Restaurant (e.g. '*Pace Restaurant, Dera Ismail Khan* mein khush amdeed! 🍽️').\n"
-                "3) Explicitly mention menu card sent 👆 ('Yeh raha humara menu card 👆').\n"
-                "4) Ask for choice: Delivery or Takeaway? ('Aap *Delivery* karwana chahte hain ya *Takeaway*?')"
-            )
-        })
+        if not hours.get("is_open", True):
+            messages.append({
+                "role": "system",
+                "content": (
+                    "MANDATORY GREETING INSTRUCTION (RESTAURANT IS CLOSED):\n"
+                    "1) Greet warmly (e.g. 'Assalam-o-Alaikum! 🌟').\n"
+                    "2) Welcome to Pace Restaurant (e.g. '*Pace Restaurant, Dera Ismail Khan* mein khush amdeed! 🍽️').\n"
+                    "3) State clearly that restaurant is currently closed and opening time is 11:00 AM PKT.\n"
+                    "4) Inform that we DO NOT take advance orders (neither delivery nor takeaway), and live orders will be taken starting at 11:00 AM.\n"
+                    "5) Explicitly mention menu card sent 👆 for viewing."
+                )
+            })
+        else:
+            messages.append({
+                "role": "system",
+                "content": (
+                    "MANDATORY GREETING INSTRUCTION:\n"
+                    "1) Greet warmly (e.g. 'Assalam-o-Alaikum! 🌟').\n"
+                    "2) Welcome to Pace Restaurant (e.g. '*Pace Restaurant, Dera Ismail Khan* mein khush amdeed! 🍽️').\n"
+                    "3) Explicitly mention menu card sent 👆 ('Yeh raha humara menu card 👆').\n"
+                    "4) Ask for choice: Delivery or Takeaway? ('Aap *Delivery* karwana chahte hain ya *Takeaway*?')"
+                )
+            })
 
     try:
         for turn_idx in range(5):  # Max 5 tool iterations per turn
@@ -470,6 +484,35 @@ async def run_agent_loop(
                     "name": tool_name,
                     "content": json.dumps(tool_result)
                 })
+
+        # Safeguard: If save_order was executed (latest_order_record exists) but notify_admins_and_kitchen
+        # was not executed by the LLM (which happens frequently on Takeaway orders), auto-notify now:
+        if latest_order_record and not any(t.get("name") == "notify_admins_and_kitchen" for t in executed_tools):
+            logger.info("Auto-executing notify_admins_and_kitchen for saved order %s", latest_order_record.get("order_id"))
+            saved_p = latest_order_record.get("order_payload", {})
+            notify_res, _ = await execute_tool_call(
+                tool_name="notify_admins_and_kitchen",
+                tool_args={
+                    "order_id": latest_order_record.get("order_id"),
+                    "customer_name": saved_p.get("customer_name") or session.get("name"),
+                    "order_type": saved_p.get("order_type") or session.get("order_type", "Takeaway"),
+                    "total_bill": latest_order_record.get("total_bill"),
+                    "delivery_address": saved_p.get("delivery_address") or session.get("address"),
+                    "pickup_time": saved_p.get("pickup_time") or session.get("pickup_time"),
+                    "notes": saved_p.get("notes") or session.get("notes", "")
+                },
+                session=session,
+                phone=phone,
+                dispatch_mode=dispatch_mode,
+                latest_order_record=latest_order_record,
+                waha_session=waha_session,
+                sender_jid=sender_jid
+            )
+            executed_tools.append({
+                "name": "notify_admins_and_kitchen",
+                "args": {"order_id": latest_order_record.get("order_id")},
+                "result": notify_res
+            })
 
     except Exception as e:
         logger.exception("Error in agent runner execution for %s: %s", phone, e)

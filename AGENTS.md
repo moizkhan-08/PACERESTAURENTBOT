@@ -93,7 +93,7 @@ The restaurant operates in **Asia/Karachi** timezone (`services/hours.py`):
 |---|---|---|
 | **Full Menu Shift** | `11:00 AM – 3:30 PM` & `6:30 PM – 11:30 PM` | Complete menu available: Sobat, Karahi, Handi, BBQ, Rice, Fast Food, Drinks, Roti. |
 | **Sobat Only Shift** | `3:30 PM – 6:30 PM` | Afternoon specialized shift. **Only Sobat / Paenda**, Naan, Roti, and Drinks are served. Other items politely deferred to 6:30 PM. |
-| **Closed Shift** | `11:30 PM – 11:00 AM` | Restaurant closed. Explains 11:00 AM opening, takes **advance orders** for lunch, answers general queries. Live cooking dispatches are paused. |
+| **Closed Shift** | `11:30 PM – 11:00 AM` | Restaurant closed. Explains 11:00 AM opening, strictly **declines advance orders** (delivery & takeaway), answers menu/general queries. Live cooking dispatches are paused. |
 
 *Override Flag:* Setting Redis key `flag:force_open = "1"` forces the Full Menu shift 24/7 (used for testing).
 
@@ -104,7 +104,10 @@ The restaurant operates in **Asia/Karachi** timezone (`services/hours.py`):
 The bot strictly guides the customer through these 7 progressive steps (`services/prompts.py`):
 
 1. **Step 1 — Order Type:** Asks: *"Aap Delivery chahte hain ya Takeaway?"*
-2. **Step 2 — Item Selection & Clarification:** Understands items, queries `read_menu`. Clarifies variants if ambiguous (*"Chicken wali chahiye ya simple?"*).
+2. **Step 2 — Item Selection & Sobat Combinations:**
+   * Understands items, queries `read_menu`.
+   * **DI Khan Sobat Nafri vs Pieces Rule:** If customer says "2 nafr sobat and one piece" (or "2 nafri sobat 1 piece"), this means **1 nafri Chicken Sobat** (with piece) + **1 nafri Simple Sobat** (saada without piece).
+   * Sobat variations: Leg (default), Chest, BBQ, Mutton, Beef Champ, Desi Murgh, Simple. Clarifies if ambiguous (*"Chicken wali chahiye ya simple?"*).
 3. **Step 3 — Packaging (STRICTLY & EXCLUSIVELY SOBAT):**
    * If Sobat / Paenda: *"Sobat Thal mein chahiye ya disposable mein?"*
    * If Karahi, BBQ, Rice, Fast Food, etc.: **SKIP STEP 3 COMPLETELY.** Never ask or mention Thal.
@@ -118,19 +121,20 @@ The bot strictly guides the customer through these 7 progressive steps (`service
    ─────────────────
    👤 *Customer:* [Name]
    📦 *Type:* [Delivery/Takeaway]
-   📍 *Address:* [Address]
+   📍 *Address / Pickup:* [Address or Pickup Time]
    ─────────────────
    🛒 *Items:*
    • [qty]x *[item]* — Rs. [price]
    ─────────────────
    💰 *Total: Rs. [total]*
-   💳 Cash on Delivery
+   💳 Cash on Delivery / Counter
    ─────────────────
    _Confirm karein? (Haan / Cancel)_
    ```
-7. **Step 7 — Dual Execution:**
+7. **Step 7 — Dual Execution (Both Takeaway & Delivery):**
    * Customer says "Haan/Confirm" → Executes `save_order` (Supabase DB) **and** `notify_admins_and_kitchen` (WhatsApp alerts) simultaneously.
-   * Returns Order ID and ETA (Chicken: 30–45m, Beef/Mutton/Sobat: 45–60m).
+   * **Takeaway & Delivery Mandate:** Real-time alerts are sent to Kitchen, Admin, and Admin WhatsApp Group for BOTH Takeaway and Delivery orders.
+   * Returns Order ID and ETA (Chicken: 30–45m, Beef/Mutton/Sobat: 45–60m, Takeaway: 20–25m).
    * **Cart Cleanup:** Automatically wipes staged items, subtotal, and total bill from session so future customer chats start with a clean slate.
 
 ---
@@ -162,6 +166,12 @@ All financial, state, and menu operations are strictly controlled in Python code
    * Reports issues directly to `ADMIN_GROUP_JID` and `ADMIN_WHATSAPP` via retry-backed WhatsApp dispatch. Does not issue unauthorized refunds.
 7. **Dead-Letter Queue:**
    * Any WhatsApp dispatch failure after 3 exponential backoff attempts is persisted to `failed_dispatches` in Supabase for auditing.
+8. **Strictly No Advance Orders:**
+   * Neither advance delivery nor advance takeaway orders are accepted (whether open or closed). All orders must be live, immediate orders. Advance requests are politely declined.
+9. **DI Khan Sobat Decomposition & Variations:**
+   * Automatically decomposes composite Sobat orders (`decompose_sobat_items`). For example, "2 nafr sobat and one piece" is deterministically broken down into 1x Chicken Sobat + 1x Simple Sobat.
+10. **Guaranteed Takeaway & Delivery Notifications:**
+   * If `save_order` is executed, the backend guarantees dispatch of `notify_admins_and_kitchen` to Kitchen, Admin, and Admin Group even if the LLM omits the tool call on Takeaway orders.
 
 ---
 

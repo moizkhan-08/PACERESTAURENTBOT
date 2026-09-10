@@ -195,23 +195,23 @@ def resolve_menu_item_price(
 
         if is_bbq:
             target = next((it for it in sorted_menu if "bbq chicken sobat" in it.get("name", "").lower() and ("chest" in it.get("name", "").lower() if is_chest else "leg" in it.get("name", "").lower())), None)
-            if target: matched_item = (target["name"], float(target["price"]), "Chest" if is_chest else "Leg")
+            matched_item = (target["name"], float(target["price"]), "Chest" if is_chest else "Leg") if target else ("BBQ Chicken Sobat", 550.0 if is_chest else 520.0, "Chest" if is_chest else "Leg")
         elif is_mutton:
             target = next((it for it in sorted_menu if "mutton sobat" in it.get("name", "").lower()), None)
-            if target: matched_item = (target["name"], float(target["price"]), "Single")
+            matched_item = (target["name"], float(target["price"]), "Single") if target else ("Mutton Sobat", 1200.0, "Single")
         elif is_beef:
             target = next((it for it in sorted_menu if "beef champ sobat" in it.get("name", "").lower()), None)
-            if target: matched_item = (target["name"], float(target["price"]), "Single")
+            matched_item = (target["name"], float(target["price"]), "Single") if target else ("Beef Champ Sobat", 1100.0, "Single")
         elif is_simple:
             target = next((it for it in sorted_menu if "simple sobat" in it.get("name", "").lower()), None)
-            if target: matched_item = (target["name"], float(target["price"]), "Single")
+            matched_item = (target["name"], float(target["price"]), "Single") if target else ("Simple Sobat", 320.0, "Single")
         elif is_desi:
             target = next((it for it in sorted_menu if "desi murgh sobat" in it.get("name", "").lower()), None)
-            if target: matched_item = (target["name"], float(target["price"]), "Single")
+            matched_item = (target["name"], float(target["price"]), "Single") if target else ("Desi Murgh Sobat", 1200.0, "Single")
         elif "full" not in clean and "full" not in var_clean:
             # Standard Chicken Sobat Fry Pieces (Leg default, Chest if specified)
             target = next((it for it in sorted_menu if "chicken sobat" in it.get("name", "").lower() and "bbq" not in it.get("name", "").lower() and ("chest" in it.get("name", "").lower() if is_chest else "leg" in it.get("name", "").lower())), None)
-            if target: matched_item = (target["name"], float(target["price"]), "Chest" if is_chest else "Leg")
+            matched_item = (target["name"], float(target["price"]), "Chest" if is_chest else "Leg") if target else (f"Chicken Sobat ({'Chest' if is_chest else 'Leg'})", 540.0 if is_chest else 480.0, "Chest" if is_chest else "Leg")
 
     # Priority 3: Karahi & Handi items
     if not matched_item and ("karahi" in clean or "handi" in clean):
@@ -303,6 +303,119 @@ def resolve_menu_item_price(
     return name, 0.0, variant
 
 
+def decompose_sobat_items(items: list[dict]) -> list[dict]:
+    """
+    Intelligently decomposes DI Khan Sobat / Paenda composite order items into authentic dishes.
+    Handles traditional variations like:
+    - '2 nafr sobat and one piece' -> 1x Chicken Sobat (Leg) + 1x Simple Sobat
+    - '2 nafri sobat 1 piece' -> 1x Chicken Sobat (Leg) + 1x Simple Sobat
+    - '3 nafri sobat 2 piece' -> 2x Chicken Sobat (Leg) + 1x Simple Sobat
+    - '2 nafri sobat ek leg ek chest' -> 1x Chicken Sobat (Leg) + 1x Chicken Sobat (Chest)
+    - '4 nafri sobat 2 piece' -> 2x Chicken Sobat (Leg) + 2x Simple Sobat
+    """
+    word_to_num = {
+        "1": 1, "ek": 1, "aik": 1, "one": 1, "single": 1,
+        "2": 2, "do": 2, "two": 2,
+        "3": 3, "teen": 3, "tin": 3, "three": 3,
+        "4": 4, "chaar": 4, "char": 4, "four": 4,
+        "5": 5, "paanch": 5, "panch": 5, "five": 5,
+        "6": 6, "chhe": 6, "che": 6, "six": 6,
+        "7": 7, "saat": 7, "seven": 7,
+        "8": 8, "aath": 8, "eight": 8,
+        "9": 9, "nau": 9, "nine": 9,
+        "10": 10, "das": 10, "ten": 10
+    }
+
+    decomposed = []
+    for item in items:
+        raw_name = str(item.get("name", "")).strip()
+        variant = str(item.get("variant") or "").strip()
+        notes = str(item.get("notes") or "").strip()
+        qty = max(1, int(item.get("quantity") or item.get("qty") or 1))
+
+        combined_text = f"{raw_name} {variant} {notes}".lower()
+
+        # Check if this item is Sobat / Paenda
+        is_sobat = any(w in combined_text for w in ["sobat", "paenda", "painda"])
+        if not is_sobat:
+            decomposed.append(item)
+            continue
+
+        # Check for 1 leg 1 chest / ek leg ek chest variation
+        has_leg = "leg" in combined_text
+        has_chest = "chest" in combined_text
+        if has_leg and has_chest and any(w in combined_text for w in ["1", "ek", "aik", "one", "har"]):
+            decomposed.append({
+                "name": "Chicken Sobat",
+                "quantity": 1,
+                "variant": "Leg",
+                "notes": notes
+            })
+            decomposed.append({
+                "name": "Chicken Sobat",
+                "quantity": 1,
+                "variant": "Chest",
+                "notes": notes
+            })
+            continue
+
+        # Look for nafri count and piece count
+        nafri_match = re.search(r'(\d+|ek|aik|one|do|two|teen|tin|three|chaar|char|four|paanch|panch|five)\s*(?:nafri|nafr|nfr|person|persons|plate|plates)?\s*(?:sobat|paenda|painda)?', combined_text)
+        piece_match = re.search(r'(\d+|ek|aik|one|do|two|teen|tin|three|chaar|char|four|paanch|panch|five)\s*(?:chicken\s*)?(?:piece|pieces|pcs|pc|pis)', combined_text)
+
+        detected_nafri = None
+        if nafri_match:
+            val_str = nafri_match.group(1).lower()
+            detected_nafri = word_to_num.get(val_str)
+        if not detected_nafri:
+            detected_nafri = qty if qty > 1 else None
+
+        detected_pieces = None
+        if piece_match:
+            p_val = piece_match.group(1).lower()
+            detected_pieces = word_to_num.get(p_val)
+
+        # Case 1: Pieces < Nafri (e.g. 2 nafri sobat 1 piece -> 1 chicken sobat + 1 simple sobat)
+        if detected_nafri and detected_pieces and detected_pieces < detected_nafri:
+            chicken_var = "Chest" if "chest" in combined_text else "Leg"
+            decomposed.append({
+                "name": "Chicken Sobat",
+                "quantity": detected_pieces,
+                "variant": chicken_var,
+                "notes": notes
+            })
+            simple_qty = detected_nafri - detected_pieces
+            decomposed.append({
+                "name": "Simple Sobat",
+                "quantity": simple_qty,
+                "variant": "Single",
+                "notes": notes
+            })
+            continue
+
+        # Case 2: Only 1 piece mentioned with qty > 1 (e.g. qty=2, variant="1 piece" or "one piece")
+        if qty > 1 and any(p in combined_text for p in ["1 piece", "one piece", "ek piece", "1 pc", "1 pis"]):
+            chicken_var = "Chest" if "chest" in combined_text else "Leg"
+            decomposed.append({
+                "name": "Chicken Sobat",
+                "quantity": 1,
+                "variant": chicken_var,
+                "notes": notes
+            })
+            decomposed.append({
+                "name": "Simple Sobat",
+                "quantity": qty - 1,
+                "variant": "Single",
+                "notes": notes
+            })
+            continue
+
+        # Default: keep item as is
+        decomposed.append(item)
+
+    return decomposed
+
+
 async def calculate_bill(
     items: list[dict],
     order_type: str = "Delivery",
@@ -314,6 +427,7 @@ async def calculate_bill(
     Guarantees that total line values are NEVER multiplied by quantity twice.
     """
     menu_items = await read_menu()
+    items = decompose_sobat_items(items)
 
     subtotal = 0.0
     parsed_items = []
@@ -509,13 +623,17 @@ async def notify_admins_and_kitchen(order_id: str, order_data: dict, session: Op
     total_bill = order_data.get("total_bill", 0)
     notes = sanitize_free_text(order_data.get("notes", "None"))
 
+    is_delivery = str(order_type).strip().lower() == "delivery"
+    loc_header = "📍 *Address:*" if is_delivery else "🛍️ *Pickup Time (Takeaway):*"
+    loc_val = address if is_delivery else (pickup_time if pickup_time and pickup_time != "N/A" else "Immediate (Takeaway)")
+
     # 1. Kitchen Alert (Focused on cooking & packaging)
     kitchen_msg = (
         f"👨‍🍳 *NEW ORDER ALERT — {order_id}*\n"
         f"────────────────────\n"
         f"📋 *Type:* {order_type}\n"
         f"👤 *Customer:* {customer_name} ({phone})\n"
-        f"📍 *{'Address' if order_type == 'Delivery' else 'Pickup Time'}:* {address if order_type == 'Delivery' else pickup_time}\n"
+        f"{loc_header} {loc_val}\n"
         f"📝 *Special Notes:* {notes}\n"
         f"────────────────────\n"
         f"🍴 *ITEMS TO PREPARE:*\n{items_summary}\n"
@@ -530,7 +648,7 @@ async def notify_admins_and_kitchen(order_id: str, order_data: dict, session: Op
         f"👤 *Customer:* {customer_name}\n"
         f"📞 *Phone:* {phone}\n"
         f"📦 *Type:* {order_type}\n"
-        f"📍 *Location/Time:* {address if order_type == 'Delivery' else pickup_time}\n"
+        f"{loc_header} {loc_val}\n"
         f"💰 *Total Amount:* Rs. {total_bill:,.0f}\n"
         f"📝 *Notes:* {notes}\n"
         f"────────────────────\n"
