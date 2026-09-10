@@ -146,4 +146,32 @@ async def test_notify_takeaway_order():
         assert "admin_group" in res["recipients"]
 
 
+@pytest.mark.anyio
+async def test_roti_and_maana_prices():
+    from services.tools import resolve_menu_item_price, calculate_bill
+
+    # Verify all spelling variants of Maana resolve to Rs. 30
+    for name in ["8 manny", "manna", "mana", "maana", "maane", "mane"]:
+        res_name, price, _ = resolve_menu_item_price(name, "", 0.0, [])
+        assert price == 30.0, f"Expected 30.0 for {name}, got {price}"
+        assert "Maana" in res_name
+
+    # Verify all variants of Roti / Tanoor Roti resolve to Rs. 20
+    for name in ["4 roti", "tanoor roti", "tandoor roti", "tandoori roti"]:
+        res_name, price, _ = resolve_menu_item_price(name, "", 0.0, [])
+        assert price == 20.0, f"Expected 20.0 for {name}, got {price}"
+        assert "Roti" in res_name
+
+    # Verify calculate_bill: 8 manny = 8 x 30 = 240
+    calc_manny = await calculate_bill([{"name": "manny", "quantity": 8}], order_type="Takeaway")
+    assert calc_manny["subtotal"] == 240.0
+    assert calc_manny["items"][0]["unit_price"] == 30.0
+
+    # Verify calculate_bill: 4 tanoor roti = 4 x 20 = 80
+    calc_roti = await calculate_bill([{"name": "tanoor roti", "quantity": 4}], order_type="Takeaway")
+    assert calc_roti["subtotal"] == 80.0
+    assert calc_roti["items"][0]["unit_price"] == 20.0
+
+
+
 

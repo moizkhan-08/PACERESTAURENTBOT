@@ -84,6 +84,17 @@ async def read_menu(category: Optional[str] = None, search: Optional[str] = None
     query = search or category
     if query:
         q = query.strip().lower()
+        # Bread alias lookup for maana / roti queries
+        q_words = set(re.findall(r'[a-zA-Z]+', q))
+        if bool(q_words.intersection({"manny", "manna", "mana", "maana", "maane", "mane"})):
+            matched = [it for it in items if any(k in it.get("name", "").lower() for k in ["maana", "manna", "roti"])]
+            if matched:
+                return matched
+        if bool(q_words.intersection({"tanoor", "tandoor", "tandoori", "roti"})):
+            matched = [it for it in items if any(k in it.get("name", "").lower() for k in ["roti", "tandoori", "maana", "naan"])]
+            if matched:
+                return matched
+
         # 1. Match category (exact or partial)
         matched = [it for it in items if q in it.get("category", "").lower()]
         # 2. If no category matched, match item name (e.g. 'Sobat', 'Karahi', 'Tikka')
@@ -228,20 +239,35 @@ def resolve_menu_item_price(
                     matched_item = (it["name"], float(it["price"]), "Full")
                     break
 
-    # Priority 4: Breads (Roti, Naan)
-    if not matched_item and ("roti" in clean or "maana" in clean):
-        target = next((it for it in sorted_menu if "roti" in it.get("name", "").lower()), None)
-        if target: matched_item = (target["name"], float(target["price"]), "Per Head")
+    # Priority 4: Breads (Maana / Manna, Roti / Tandoor Roti, Naan)
+    maana_tokens = {"manny", "manna", "mana", "maana", "maane", "mane"}
+    roti_tokens = {"roti", "tanoor", "tandoor", "tandoori"}
+    clean_words = set(re.findall(r'[a-zA-Z]+', clean))
+    is_per_head = ("per head" in clean or "perhead" in clean or "per head" in var_clean or "perhead" in var_clean)
+
+    if not matched_item:
+        if is_per_head:
+            target = next((it for it in sorted_menu if "per head" in it.get("name", "").lower()), None)
+            matched_item = (target["name"], float(target["price"]), "Per Head") if target else ("Roti / Maana Per Head", 60.0, "Per Head")
+        elif bool(clean_words.intersection(maana_tokens)) or any(k in clean for k in ["manny", "manna", "maana", "maane", "mana"]):
+            target = next((it for it in sorted_menu if it.get("name", "").lower() in ["maana", "manna"]), None)
+            matched_item = (target["name"], float(target["price"]), "Piece") if target else ("Maana", 30.0, "Piece")
+        elif bool(clean_words.intersection(roti_tokens)) or any(k in clean for k in ["tanoor", "tandoor", "tandoori", "roti"]):
+            target = next((it for it in sorted_menu if it.get("name", "").lower() in ["tandoori roti", "tandoor roti", "roti"]), None)
+            matched_item = (target["name"], float(target["price"]), "Piece") if target else ("Tandoori Roti", 20.0, "Piece")
+
     if not matched_item and "naan" in clean:
         is_roghni = "roghni" in clean or "roghni" in var_clean
         is_garlic = "garlic" in clean or "garlic" in var_clean
         if is_roghni:
             target = next((it for it in sorted_menu if "roghni naan" in it.get("name", "").lower()), None)
+            matched_item = (target["name"], float(target["price"]), "Single") if target else ("Roghni Naan", 60.0, "Single")
         elif is_garlic:
             target = next((it for it in sorted_menu if "garlic naan" in it.get("name", "").lower()), None)
+            matched_item = (target["name"], float(target["price"]), "Single") if target else ("Garlic Naan", 80.0, "Single")
         else:
             target = next((it for it in sorted_menu if "simple naan" in it.get("name", "").lower()), None)
-        if target: matched_item = (target["name"], float(target["price"]), "Single")
+            matched_item = (target["name"], float(target["price"]), "Single") if target else ("Simple Naan", 50.0, "Single")
 
     # Priority 5: Known Aliases
     aliases = {
@@ -287,7 +313,7 @@ def resolve_menu_item_price(
         # Anti-Multiplication Guardrail:
         # If caller passed a price for qty > 1, check if it was already the multiplied total:
         if passed_p > 0:
-            is_multiplied_total = (qty > 1 and (abs(passed_p - (db_price * qty)) <= 10.0 or (passed_p >= db_price * 1.8 and abs((passed_p / qty) - db_price) <= 10.0)))
+            is_multiplied_total = (qty > 1 and passed_p >= 100.0 and (abs(passed_p - (db_price * qty)) <= 10.0 or (passed_p >= db_price * 1.8 and abs((passed_p / qty) - db_price) <= 10.0)))
             if is_multiplied_total:
                 final_unit_price = db_price
             else:

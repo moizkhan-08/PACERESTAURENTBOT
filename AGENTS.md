@@ -171,7 +171,12 @@ All financial, state, and menu operations are strictly controlled in Python code
 9. **DI Khan Sobat Decomposition & Variations:**
    * Automatically decomposes composite Sobat orders (`decompose_sobat_items`). For example, "2 nafr sobat and one piece" is deterministically broken down into 1x Chicken Sobat + 1x Simple Sobat.
 10. **Guaranteed Takeaway & Delivery Notifications:**
-   * If `save_order` is executed, the backend guarantees dispatch of `notify_admins_and_kitchen` to Kitchen, Admin, and Admin Group even if the LLM omits the tool call on Takeaway orders.
+    * If `save_order` is executed, the backend guarantees dispatch of `notify_admins_and_kitchen` to Kitchen, Admin, and Admin Group even if the LLM omits the tool call on Takeaway orders.
+11. **Roti & Maana Separation & Alias Pricing:**
+    * Separates "Roti / Maana" into distinct dishes:
+      - **Maana (Manna):** Aliases (`manny`, `manna`, `mana`, `maana`, `maane`, `mane`) deterministically resolve to **Rs. 30** each.
+      - **Tandoori Roti:** Aliases (`roti`, `tanoor roti`, `tandoor roti`, `tandoori roti`) deterministically resolve to **Rs. 20** each.
+      - **Roti / Maana Per Head:** Resolves to **Rs. 60** per head only when explicitly requested.
 
 ---
 
