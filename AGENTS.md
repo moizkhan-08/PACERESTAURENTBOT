@@ -107,13 +107,14 @@ The bot strictly guides the customer through these 7 progressive steps (`service
 2. **Step 2 — Item Selection & Sobat Combinations:**
    * Understands items, queries `read_menu`.
    * **DI Khan Sobat Nafri vs Pieces Rule:** If customer says "2 nafr sobat and one piece" (or "2 nafri sobat 1 piece"), this means **1 nafri Chicken Sobat** (with piece) + **1 nafri Simple Sobat** (saada without piece).
-   * Sobat variations: Leg (default), Chest, BBQ, Mutton, Beef Champ, Desi Murgh, Simple. Clarifies if ambiguous (*"Chicken wali chahiye ya simple?"*).
+   * **BBQ Piece vs Fried Piece Distinction:** BBQ piece (BBQ Chicken Sobat: Leg Rs. 530 / Chest Rs. 560) and Fried piece (Chicken Sobat Fry Pieces: Leg Rs. 520 / Chest Rs. 550) are **TWO DIFFERENT DISHES** with different prices. "1 bbq piece sobat and 1 fried piece" resolves to **1x BBQ Chicken Sobat** + **1x Chicken Sobat (Fry Pieces)**.
+   * Sobat variations: Chicken Fry Pieces (Leg/Chest), BBQ Chicken Sobat (Leg/Chest), Simple Sobat (Rs. 220), Mutton Sobat (Rs. 950), Beef Champ Sobat (Rs. 750), Desi Murgh Sobat (Rs. 800), Batair Sobat (Rs. 700), Platters (Mutton/Beef/Fish).
 3. **Step 3 — Packaging (STRICTLY & EXCLUSIVELY SOBAT):**
    * If Sobat / Paenda: *"Sobat Thal mein chahiye ya disposable mein?"*
    * If Karahi, BBQ, Rice, Fast Food, etc.: **SKIP STEP 3 COMPLETELY.** Never ask or mention Thal.
 4. **Step 4 — Bill Calculation:** Calls `calculate_bill`. Displays items, subtotal, and any Thal deposit. Enforces minimum delivery order (Rs. 300).
 5. **Step 5 — Customer Info:**
-   * Delivery: Name & complete address (area, street, house number). If returning customer, confirms known address.
+   * Delivery: Name & delivery address. **STRICTLY DO NOT ASK FOR GALI, STREET, GHAR NUMBER, OR LANDMARK.** Just ask for delivery address. If returning customer, confirms known address.
    * Takeaway: Name & expected pickup time.
 6. **Step 6 — Receipt Confirmation:** Displays clean receipt box:
    ```text
@@ -169,7 +170,11 @@ All financial, state, and menu operations are strictly controlled in Python code
 8. **Strictly No Advance Orders:**
    * Neither advance delivery nor advance takeaway orders are accepted (whether open or closed). All orders must be live, immediate orders. Advance requests are politely declined.
 9. **DI Khan Sobat Decomposition & Variations:**
-   * Automatically decomposes composite Sobat orders (`decompose_sobat_items`). For example, "2 nafr sobat and one piece" is deterministically broken down into 1x Chicken Sobat + 1x Simple Sobat.
+   * Automatically decomposes composite Sobat orders (`decompose_sobat_items`).
+   * "2 nafr sobat and one piece" -> 1x Chicken Sobat + 1x Simple Sobat.
+   * "1 bbq piece sobat and one fried piece" -> 1x BBQ Chicken Sobat (Leg Rs. 530 / Chest Rs. 560) + 1x Chicken Sobat (Fry Pieces) (Leg Rs. 520 / Chest Rs. 550).
+   * "2 nafri sobat 1 bbq piece" -> 1x BBQ Chicken Sobat + 1x Simple Sobat.
+   * "3 nafri sobat 1 bbq 1 fry" -> 1x BBQ + 1x Fry + 1x Simple Sobat.
 10. **Guaranteed Takeaway & Delivery Notifications:**
     * If `save_order` is executed, the backend guarantees dispatch of `notify_admins_and_kitchen` to Kitchen, Admin, and Admin Group even if the LLM omits the tool call on Takeaway orders.
 11. **Roti & Maana Separation & Alias Pricing:**
@@ -222,7 +227,16 @@ python -m pytest tests/
 python -m pytest tests/test_bot_core.py
 python -m pytest tests/test_admin_commands.py
 python -m pytest tests/test_interactive_tools.py
+
+# Autonomous Universal Testing File (Modify & reuse for all ongoing verification)
+python universal_test.py
 ```
+
+### Autonomous Testing & Validation Rules:
+1. **Zero Unnecessary Permissions:** Never ask for permission for routine, safe, reversible development testing. Perform validation autonomously.
+2. **Single Reusable Test File:** Always maintain and reuse `universal_test.py` in the project root. Do not create dozens of scattered one-off test scripts.
+3. **Continuous Feedback Loop:** Follow `Modify code -> update universal_test.py -> execute -> diagnose -> fix -> re-test` until complete.
+4. **Only Involve User for Critical Actions:** Involve user only for destructive operations (deleting databases/user data), external purchases, or production deployment authorization.
 
 ### Testing Via Web Simulator:
 The bot includes a web simulation endpoint to test multi-turn conversations without sending real WhatsApp messages:

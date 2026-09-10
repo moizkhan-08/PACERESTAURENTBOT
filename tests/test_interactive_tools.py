@@ -109,10 +109,43 @@ def test_decompose_sobat_items():
     assert dec_3[0]["variant"] == "Leg"
     assert dec_3[1]["variant"] == "Chest"
 
-    # 4. Standard non-sobat item should remain unchanged
-    items_4 = [{"name": "Chicken Karahi Half", "quantity": 1}]
-    dec_4 = decompose_sobat_items(items_4)
-    assert dec_4 == items_4
+    # 4. BBQ vs Fried Piece distinction: "1 bbq piece sobat and one fried piece"
+    items_bbq_fry = [{"name": "1 bbq piece sobat and one fried piece", "quantity": 1}]
+    dec_bbq_fry = decompose_sobat_items(items_bbq_fry)
+    assert len(dec_bbq_fry) == 2
+    assert dec_bbq_fry[0]["name"] == "BBQ Chicken Sobat"
+    assert dec_bbq_fry[0]["quantity"] == 1
+    assert "Chicken Sobat" in dec_bbq_fry[1]["name"]
+    assert dec_bbq_fry[1]["quantity"] == 1
+
+    # 5. BBQ Chest and Fried Leg cut distinction
+    items_cuts = [{"name": "one bbq piece chest sobat and one fried piece leg sobat", "quantity": 1}]
+    dec_cuts = decompose_sobat_items(items_cuts)
+    assert len(dec_cuts) == 2
+    assert dec_cuts[0]["name"] == "BBQ Chicken Sobat"
+    assert dec_cuts[0]["variant"] == "Chest"
+    assert "Chicken Sobat" in dec_cuts[1]["name"]
+    assert dec_cuts[1]["variant"] == "Leg"
+
+    # 6. "2 nafri sobat 1 bbq piece" -> 1x BBQ Chicken Sobat + 1x Simple Sobat
+    items_bbq_simple = [{"name": "2 nafri sobat 1 bbq piece", "quantity": 1}]
+    dec_bbq_simple = decompose_sobat_items(items_bbq_simple)
+    assert len(dec_bbq_simple) == 2
+    assert dec_bbq_simple[0]["name"] == "BBQ Chicken Sobat"
+    assert dec_bbq_simple[1]["name"] == "Simple Sobat"
+
+    # 7. Standard non-sobat item should remain unchanged
+    items_non_sobat = [{"name": "Chicken Karahi Half", "quantity": 1}]
+    dec_non_sobat = decompose_sobat_items(items_non_sobat)
+    assert dec_non_sobat == items_non_sobat
+
+
+def test_delivery_address_prompt_rules():
+    from services.prompts import SYSTEM_BASE_INSTRUCTIONS
+    # Verify we do NOT ask for gali, street, ghar number or landmark in address prompt
+    assert "Aapka naam aur *delivery address* bata dein" in SYSTEM_BASE_INSTRUCTIONS
+    assert "(area, gali, ghar number)" not in SYSTEM_BASE_INSTRUCTIONS
+    assert "BBQ PIECE VS FRIED PIECE FARQ" in SYSTEM_BASE_INSTRUCTIONS
 
 
 @pytest.mark.anyio

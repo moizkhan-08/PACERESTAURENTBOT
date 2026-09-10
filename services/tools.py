@@ -187,42 +187,60 @@ def resolve_menu_item_price(
 
     matched_item = None
 
-    # Priority 1: Exact case-insensitive match in DB
-    if clean in db_lookup:
-        matched_item = db_lookup[clean]
-    elif raw_name_clean.lower() in db_lookup:
-        matched_item = db_lookup[raw_name_clean.lower()]
-    elif var_clean and f"{clean} {var_clean}" in db_lookup:
-        matched_item = db_lookup[f"{clean} {var_clean}"]
-
-    # Priority 2: Core Sobat / Paenda items (Always enforces true restaurant prices)
-    if not matched_item and ("sobat" in clean or "paenda" in clean):
+    # Priority 1: Core Sobat / Paenda items (Always enforces true modern restaurant prices & avoids legacy items)
+    if "sobat" in clean or "paenda" in clean:
         is_chest = "chest" in clean or "chest" in var_clean
         is_bbq = "bbq" in clean
+        is_fry = "fry" in clean or "fry" in var_clean
         is_desi = "desi" in clean
         is_mutton = "mutton" in clean
         is_beef = "beef" in clean
         is_simple = "simple" in clean or "saada" in clean
+        is_batair = "batair" in clean
 
-        if is_bbq:
-            target = next((it for it in sorted_menu if "bbq chicken sobat" in it.get("name", "").lower() and ("chest" in it.get("name", "").lower() if is_chest else "leg" in it.get("name", "").lower())), None)
-            matched_item = (target["name"], float(target["price"]), "Chest" if is_chest else "Leg") if target else ("BBQ Chicken Sobat", 550.0 if is_chest else 520.0, "Chest" if is_chest else "Leg")
-        elif is_mutton:
-            target = next((it for it in sorted_menu if "mutton sobat" in it.get("name", "").lower()), None)
-            matched_item = (target["name"], float(target["price"]), "Single") if target else ("Mutton Sobat", 1200.0, "Single")
-        elif is_beef:
-            target = next((it for it in sorted_menu if "beef champ sobat" in it.get("name", "").lower()), None)
-            matched_item = (target["name"], float(target["price"]), "Single") if target else ("Beef Champ Sobat", 1100.0, "Single")
-        elif is_simple:
-            target = next((it for it in sorted_menu if "simple sobat" in it.get("name", "").lower()), None)
-            matched_item = (target["name"], float(target["price"]), "Single") if target else ("Simple Sobat", 320.0, "Single")
-        elif is_desi:
-            target = next((it for it in sorted_menu if "desi murgh sobat" in it.get("name", "").lower()), None)
-            matched_item = (target["name"], float(target["price"]), "Single") if target else ("Desi Murgh Sobat", 1200.0, "Single")
-        elif "full" not in clean and "full" not in var_clean:
-            # Standard Chicken Sobat Fry Pieces (Leg default, Chest if specified)
-            target = next((it for it in sorted_menu if "chicken sobat" in it.get("name", "").lower() and "bbq" not in it.get("name", "").lower() and ("chest" in it.get("name", "").lower() if is_chest else "leg" in it.get("name", "").lower())), None)
-            matched_item = (target["name"], float(target["price"]), "Chest" if is_chest else "Leg") if target else (f"Chicken Sobat ({'Chest' if is_chest else 'Leg'})", 540.0 if is_chest else 480.0, "Chest" if is_chest else "Leg")
+        # Check for Sobat Platters first
+        if "platter" in clean or "platter" in var_clean:
+            is_half = "half" in clean or "half" in var_clean
+            meat = "mutton" if "mutton" in clean else ("beef" if "beef" in clean else ("fish" if "fish" in clean else None))
+            if meat:
+                target = next((it for it in sorted_menu if meat in it.get("name", "").lower() and "platter" in it.get("name", "").lower() and not it.get("category", "").isupper() and ("half" in it.get("name", "").lower() if is_half else "full" in it.get("name", "").lower())), None)
+                if not target:
+                    target = next((it for it in sorted_menu if meat in it.get("name", "").lower() and "platter" in it.get("name", "").lower() and ("half" in it.get("name", "").lower() if is_half else "full" in it.get("name", "").lower())), None)
+                if target:
+                    matched_item = (target["name"], float(target["price"]), "Half" if is_half else "Full")
+
+        if not matched_item:
+            if is_bbq:
+                target = next((it for it in sorted_menu if "bbq chicken sobat" in it.get("name", "").lower() and not it.get("category", "").isupper() and ("chest" in it.get("name", "").lower() if is_chest else "leg" in it.get("name", "").lower())), None)
+                matched_item = (target["name"], float(target["price"]), "Chest" if is_chest else "Leg") if target else (f"BBQ Chicken Sobat ({'Chest' if is_chest else 'Leg'})", 560.0 if is_chest else 530.0, "Chest" if is_chest else "Leg")
+            elif is_mutton:
+                target = next((it for it in sorted_menu if "mutton sobat" in it.get("name", "").lower() and not it.get("category", "").isupper() and "platter" not in it.get("name", "").lower()), None)
+                matched_item = (target["name"], float(target["price"]), "Single") if target else ("Mutton Sobat", 950.0, "Single")
+            elif is_beef:
+                target = next((it for it in sorted_menu if "beef champ sobat" in it.get("name", "").lower() and not it.get("category", "").isupper()), None)
+                matched_item = (target["name"], float(target["price"]), "Single") if target else ("Beef Champ Sobat", 750.0, "Single")
+            elif is_simple:
+                target = next((it for it in sorted_menu if "simple sobat" in it.get("name", "").lower() and not it.get("category", "").isupper()), None)
+                matched_item = (target["name"], float(target["price"]), "Single") if target else ("Simple Sobat", 220.0, "Single")
+            elif is_desi:
+                target = next((it for it in sorted_menu if "desi murgh sobat" in it.get("name", "").lower() and not it.get("category", "").isupper()), None)
+                matched_item = (target["name"], float(target["price"]), "Single") if target else ("Desi Murgh Sobat", 800.0, "Single")
+            elif is_batair:
+                target = next((it for it in sorted_menu if "batair sobat" in it.get("name", "").lower() and not it.get("category", "").isupper()), None)
+                matched_item = (target["name"], float(target["price"]), "Single") if target else ("Batair Sobat (Seasonal)", 700.0, "Single")
+            elif "full" not in clean and "full" not in var_clean:
+                # Standard Chicken Sobat Fry Pieces (Leg default, Chest if specified)
+                target = next((it for it in sorted_menu if "chicken sobat" in it.get("name", "").lower() and "fry" in it.get("name", "").lower() and "bbq" not in it.get("name", "").lower() and not it.get("category", "").isupper() and ("chest" in it.get("name", "").lower() if is_chest else "leg" in it.get("name", "").lower())), None)
+                matched_item = (target["name"], float(target["price"]), "Chest" if is_chest else "Leg") if target else (f"Chicken Sobat (Fry Pieces) ({'Chest' if is_chest else 'Leg'})", 550.0 if is_chest else 520.0, "Chest" if is_chest else "Leg")
+
+    # Priority 2: Exact case-insensitive match in DB for all non-Sobat dishes
+    if not matched_item:
+        if clean in db_lookup:
+            matched_item = db_lookup[clean]
+        elif raw_name_clean.lower() in db_lookup:
+            matched_item = db_lookup[raw_name_clean.lower()]
+        elif var_clean and f"{clean} {var_clean}" in db_lookup:
+            matched_item = db_lookup[f"{clean} {var_clean}"]
 
     # Priority 3: Karahi & Handi items
     if not matched_item and ("karahi" in clean or "handi" in clean):
@@ -332,12 +350,16 @@ def resolve_menu_item_price(
 def decompose_sobat_items(items: list[dict]) -> list[dict]:
     """
     Intelligently decomposes DI Khan Sobat / Paenda composite order items into authentic dishes.
-    Handles traditional variations like:
-    - '2 nafr sobat and one piece' -> 1x Chicken Sobat (Leg) + 1x Simple Sobat
-    - '2 nafri sobat 1 piece' -> 1x Chicken Sobat (Leg) + 1x Simple Sobat
-    - '3 nafri sobat 2 piece' -> 2x Chicken Sobat (Leg) + 1x Simple Sobat
+    Distinguishes between BBQ Chicken Sobat (grilled piece) and Chicken Sobat Fry Pieces (fried piece).
+
+    Key decomposition rules:
+    - '2 nafr sobat and one piece' -> 1x Chicken Sobat (Fry Pieces) (Leg) + 1x Simple Sobat
+    - '2 nafri sobat 1 bbq piece' -> 1x BBQ Chicken Sobat (Leg) + 1x Simple Sobat
+    - '2 nafri sobat 1 bbq piece 1 fried piece' -> 1x BBQ Chicken Sobat + 1x Chicken Sobat (Fry Pieces)
+    - '3 nafri sobat 2 piece' -> 2x Chicken Sobat (Fry Pieces) (Leg) + 1x Simple Sobat
     - '2 nafri sobat ek leg ek chest' -> 1x Chicken Sobat (Leg) + 1x Chicken Sobat (Chest)
-    - '4 nafri sobat 2 piece' -> 2x Chicken Sobat (Leg) + 2x Simple Sobat
+    - '4 nafri sobat 2 bbq piece' -> 2x BBQ Chicken Sobat + 2x Simple Sobat
+    - '1 bbq piece sobat aur 1 fried piece sobat' -> 1x BBQ Chicken Sobat + 1x Chicken Sobat (Fry Pieces)
     """
     word_to_num = {
         "1": 1, "ek": 1, "aik": 1, "one": 1, "single": 1,
@@ -351,6 +373,7 @@ def decompose_sobat_items(items: list[dict]) -> list[dict]:
         "9": 9, "nau": 9, "nine": 9,
         "10": 10, "das": 10, "ten": 10
     }
+    _num_pattern = r'(\d+|ek|aik|one|do|two|teen|tin|three|chaar|char|four|paanch|panch|five)'
 
     decomposed = []
     for item in items:
@@ -367,27 +390,126 @@ def decompose_sobat_items(items: list[dict]) -> list[dict]:
             decomposed.append(item)
             continue
 
-        # Check for 1 leg 1 chest / ek leg ek chest variation
+        # ── Detect BBQ vs Fried piece types ──
+        has_bbq = any(w in combined_text for w in ["bbq", "barbeque", "barbecue", "bar b q"])
+        has_fry = any(w in combined_text for w in ["fry", "fried", "fried"])
         has_leg = "leg" in combined_text
         has_chest = "chest" in combined_text
-        if has_leg and has_chest and any(w in combined_text for w in ["1", "ek", "aik", "one", "har"]):
+        default_body = "Chest" if has_chest and not has_leg else "Leg"
+
+        # ── Case A: Both BBQ and Fried pieces explicitly mentioned ──
+        # e.g. "1 bbq piece aur 1 fried piece sobat" or "2 nafri sobat 1 bbq 1 fry"
+        bbq_count_match = re.search(_num_pattern + r'\s*(?:bbq|barbeque|barbecue)\s*(?:piece|pieces|pcs|pc|pis)?', combined_text)
+        fry_count_match = re.search(_num_pattern + r'\s*(?:fry|fried|fried)\s*(?:piece|pieces|pcs|pc|pis)?', combined_text)
+        # Also match reversed: "bbq piece 1" patterns
+        if not bbq_count_match:
+            bbq_count_match = re.search(r'(?:bbq|barbeque|barbecue)\s*(?:piece|pieces|pcs|pc|pis)?\s*' + _num_pattern, combined_text)
+        if not fry_count_match:
+            fry_count_match = re.search(r'(?:fry|fried|fried)\s*(?:piece|pieces|pcs|pc|pis)?\s*' + _num_pattern, combined_text)
+
+        detected_bbq_count = word_to_num.get(bbq_count_match.group(1).lower()) if bbq_count_match else None
+        detected_fry_count = word_to_num.get(fry_count_match.group(1).lower()) if fry_count_match else None
+
+        if detected_bbq_count and detected_fry_count:
+            # Detect cut (Chest vs Leg) independently for BBQ and Fried pieces
+            bbq_body = default_body
+            fry_body = default_body
+            segments = re.split(r'\s+(?:aur|and|&|\+|,)\s+|,', combined_text)
+            for seg in segments:
+                if any(w in seg for w in ["bbq", "barbeque", "barbecue"]):
+                    if "chest" in seg:
+                        bbq_body = "Chest"
+                    elif "leg" in seg:
+                        bbq_body = "Leg"
+                if any(w in seg for w in ["fry", "fried"]):
+                    if "chest" in seg:
+                        fry_body = "Chest"
+                    elif "leg" in seg:
+                        fry_body = "Leg"
+
             decomposed.append({
-                "name": "Chicken Sobat",
+                "name": "BBQ Chicken Sobat",
+                "quantity": detected_bbq_count,
+                "variant": bbq_body,
+                "notes": notes
+            })
+            decomposed.append({
+                "name": "Chicken Sobat (Fry Pieces)",
+                "quantity": detected_fry_count,
+                "variant": fry_body,
+                "notes": notes
+            })
+            # Detect total nafri to check for remaining Simple Sobat
+            nafri_match = re.search(_num_pattern + r'\s*(?:nafri|nafr|nfr|person|persons|plate|plates)', combined_text)
+            detected_nafri = word_to_num.get(nafri_match.group(1).lower()) if nafri_match else qty
+            total_pieces = detected_bbq_count + detected_fry_count
+            if detected_nafri and total_pieces < detected_nafri:
+                decomposed.append({
+                    "name": "Simple Sobat",
+                    "quantity": detected_nafri - total_pieces,
+                    "variant": "Single",
+                    "notes": notes
+                })
+            continue
+
+        # ── Case B: Only BBQ pieces mentioned (no fry) ──
+        if detected_bbq_count and not detected_fry_count:
+            decomposed.append({
+                "name": "BBQ Chicken Sobat",
+                "quantity": detected_bbq_count,
+                "variant": default_body,
+                "notes": notes
+            })
+            nafri_match = re.search(_num_pattern + r'\s*(?:nafri|nafr|nfr|person|persons|plate|plates)', combined_text)
+            detected_nafri = word_to_num.get(nafri_match.group(1).lower()) if nafri_match else qty
+            if detected_nafri and detected_bbq_count < detected_nafri:
+                decomposed.append({
+                    "name": "Simple Sobat",
+                    "quantity": detected_nafri - detected_bbq_count,
+                    "variant": "Single",
+                    "notes": notes
+                })
+            continue
+
+        # ── Case C: Only Fried pieces mentioned explicitly (no bbq) ──
+        if detected_fry_count and not detected_bbq_count:
+            decomposed.append({
+                "name": "Chicken Sobat (Fry Pieces)",
+                "quantity": detected_fry_count,
+                "variant": default_body,
+                "notes": notes
+            })
+            nafri_match = re.search(_num_pattern + r'\s*(?:nafri|nafr|nfr|person|persons|plate|plates)', combined_text)
+            detected_nafri = word_to_num.get(nafri_match.group(1).lower()) if nafri_match else qty
+            if detected_nafri and detected_fry_count < detected_nafri:
+                decomposed.append({
+                    "name": "Simple Sobat",
+                    "quantity": detected_nafri - detected_fry_count,
+                    "variant": "Single",
+                    "notes": notes
+                })
+            continue
+
+        # ── Case D: 1 leg 1 chest / ek leg ek chest (no bbq/fry specified → default Fry) ──
+        if has_leg and has_chest and any(w in combined_text for w in ["1", "ek", "aik", "one", "har"]):
+            piece_type = "BBQ Chicken Sobat" if has_bbq else "Chicken Sobat"
+            decomposed.append({
+                "name": piece_type,
                 "quantity": 1,
                 "variant": "Leg",
                 "notes": notes
             })
             decomposed.append({
-                "name": "Chicken Sobat",
+                "name": piece_type,
                 "quantity": 1,
                 "variant": "Chest",
                 "notes": notes
             })
             continue
 
-        # Look for nafri count and piece count
-        nafri_match = re.search(r'(\d+|ek|aik|one|do|two|teen|tin|three|chaar|char|four|paanch|panch|five)\s*(?:nafri|nafr|nfr|person|persons|plate|plates)?\s*(?:sobat|paenda|painda)?', combined_text)
-        piece_match = re.search(r'(\d+|ek|aik|one|do|two|teen|tin|three|chaar|char|four|paanch|panch|five)\s*(?:chicken\s*)?(?:piece|pieces|pcs|pc|pis)', combined_text)
+        # ── Case E: Generic "piece" count (no bbq/fry specified) ──
+        nafri_match = re.search(_num_pattern + r'\s*(?:nafri|nafr|nfr|person|persons|plate|plates)?\s*(?:sobat|paenda|painda)?', combined_text)
+        piece_match = re.search(_num_pattern + r'\s*(?:chicken\s*)?(?:piece|pieces|pcs|pc|pis)', combined_text)
 
         detected_nafri = None
         if nafri_match:
@@ -401,13 +523,15 @@ def decompose_sobat_items(items: list[dict]) -> list[dict]:
             p_val = piece_match.group(1).lower()
             detected_pieces = word_to_num.get(p_val)
 
-        # Case 1: Pieces < Nafri (e.g. 2 nafri sobat 1 piece -> 1 chicken sobat + 1 simple sobat)
+        # Determine piece type: BBQ if "bbq" mentioned, else default to Chicken Sobat
+        piece_name = "BBQ Chicken Sobat" if has_bbq else "Chicken Sobat"
+
+        # Case E1: Pieces < Nafri (e.g. 2 nafri sobat 1 piece -> 1 chicken sobat + 1 simple sobat)
         if detected_nafri and detected_pieces and detected_pieces < detected_nafri:
-            chicken_var = "Chest" if "chest" in combined_text else "Leg"
             decomposed.append({
-                "name": "Chicken Sobat",
+                "name": piece_name,
                 "quantity": detected_pieces,
-                "variant": chicken_var,
+                "variant": default_body,
                 "notes": notes
             })
             simple_qty = detected_nafri - detected_pieces
@@ -419,13 +543,12 @@ def decompose_sobat_items(items: list[dict]) -> list[dict]:
             })
             continue
 
-        # Case 2: Only 1 piece mentioned with qty > 1 (e.g. qty=2, variant="1 piece" or "one piece")
+        # Case E2: Only 1 piece mentioned with qty > 1 (e.g. qty=2, variant="1 piece" or "one piece")
         if qty > 1 and any(p in combined_text for p in ["1 piece", "one piece", "ek piece", "1 pc", "1 pis"]):
-            chicken_var = "Chest" if "chest" in combined_text else "Leg"
             decomposed.append({
-                "name": "Chicken Sobat",
+                "name": piece_name,
                 "quantity": 1,
-                "variant": chicken_var,
+                "variant": default_body,
                 "notes": notes
             })
             decomposed.append({

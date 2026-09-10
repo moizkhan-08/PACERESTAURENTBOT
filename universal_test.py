@@ -1,0 +1,131 @@
+"""
+Pace Restaurant Bot - Universal Autonomous Testing & Validation Script
+
+Usage:
+  python universal_test.py
+
+Rules:
+  1. This is the SINGLE dedicated testing file for autonomous development and validation.
+  2. Do not create multiple ad-hoc test scripts. Modify and reuse this file.
+  3. Run tests autonomously without interrupting for permissions on routine debugging.
+"""
+import asyncio
+import os
+import sys
+
+# Ensure project root is in sys.path
+PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
+from services.tools import decompose_sobat_items, resolve_menu_item_price, calculate_bill
+from services.prompts import SYSTEM_BASE_INSTRUCTIONS
+from services.db import db
+
+
+async def run_tests():
+    print("==================================================")
+    print(">> RUNNING UNIVERSAL VALIDATION TESTS")
+    print("==================================================")
+    
+    # ---------------------------------------------------------
+    # 1. Sobat / Paenda Decomposition Tests
+    # ---------------------------------------------------------
+    print("\n[1/4] Testing Sobat Variations & Decomposition...")
+    
+    # Case 1: "2 nafr sobat and one piece" -> 1x Chicken Sobat + 1x Simple Sobat
+    dec1 = decompose_sobat_items([{"name": "2 nafr sobat and one piece", "quantity": 1}])
+    assert len(dec1) == 2, f"Expected 2 items, got {len(dec1)}"
+    assert "Chicken Sobat" in dec1[0]["name"]
+    assert dec1[1]["name"] == "Simple Sobat"
+    print("  [OK] '2 nafr sobat and one piece' -> 1x Chicken Sobat + 1x Simple Sobat")
+
+    # Case 2: "1 bbq piece sobat and one fried piece" -> 1x BBQ (Leg) + 1x Fried (Leg)
+    dec2 = decompose_sobat_items([{"name": "1 bbq piece sobat and one fried piece", "quantity": 1}])
+    assert len(dec2) == 2
+    assert dec2[0]["name"] == "BBQ Chicken Sobat"
+    assert "Chicken Sobat" in dec2[1]["name"]
+    assert dec2[0]["variant"] == "Leg"
+    assert dec2[1]["variant"] == "Leg"
+    print("  [OK] '1 bbq piece sobat and one fried piece' -> 1x BBQ (Leg) + 1x Fried (Leg)")
+
+    # Case 3: "one bbq piece chest sobat and one fried piece leg sobat" -> 1x BBQ (Chest) + 1x Fried (Leg)
+    dec3 = decompose_sobat_items([{"name": "one bbq piece chest sobat and one fried piece leg sobat", "quantity": 1}])
+    assert len(dec3) == 2
+    assert dec3[0]["name"] == "BBQ Chicken Sobat"
+    assert dec3[0]["variant"] == "Chest"
+    assert "Chicken Sobat" in dec3[1]["name"]
+    assert dec3[1]["variant"] == "Leg"
+    print("  [OK] 'one bbq piece chest sobat and one fried piece leg sobat' -> 1x BBQ (Chest) + 1x Fried (Leg)")
+
+    # Case 4: "2 nafri sobat 1 bbq piece" -> 1x BBQ Chicken Sobat + 1x Simple Sobat
+    dec4 = decompose_sobat_items([{"name": "2 nafri sobat 1 bbq piece", "quantity": 1}])
+    assert len(dec4) == 2
+    assert dec4[0]["name"] == "BBQ Chicken Sobat"
+    assert dec4[1]["name"] == "Simple Sobat"
+    print("  [OK] '2 nafri sobat 1 bbq piece' -> 1x BBQ Chicken Sobat + 1x Simple Sobat")
+
+    # Case 5: "3 nafri sobat 1 bbq piece 1 fried piece" -> 1x BBQ + 1x Fried + 1x Simple
+    dec5 = decompose_sobat_items([{"name": "3 nafri sobat 1 bbq piece 1 fried piece", "quantity": 1}])
+    assert len(dec5) == 3
+    assert dec5[0]["name"] == "BBQ Chicken Sobat"
+    assert "Chicken Sobat" in dec5[1]["name"]
+    assert dec5[2]["name"] == "Simple Sobat"
+    print("  [OK] '3 nafri sobat 1 bbq 1 fry' -> 1x BBQ + 1x Fried + 1x Simple Sobat")
+
+    # ---------------------------------------------------------
+    # 2. Live Pricing & Bill Calculation Tests
+    # ---------------------------------------------------------
+    print("\n[2/4] Testing Menu Prices & Deterministic Bill...")
+    menu_items = await db.get_menu(available_only=True)
+
+    # BBQ Sobat prices: Leg Rs. 530, Chest Rs. 560
+    _, p_bbq_leg, _ = resolve_menu_item_price("BBQ Chicken Sobat", "Leg", 0, menu_items)
+    assert p_bbq_leg == 530.0, f"Expected 530 for BBQ Leg, got {p_bbq_leg}"
+    _, p_bbq_chest, _ = resolve_menu_item_price("BBQ Chicken Sobat", "Chest", 0, menu_items)
+    assert p_bbq_chest == 560.0, f"Expected 560 for BBQ Chest, got {p_bbq_chest}"
+    print(f"  [OK] BBQ Chicken Sobat: Leg=Rs.{p_bbq_leg}, Chest=Rs.{p_bbq_chest}")
+
+    # Fry Sobat prices: Leg Rs. 520, Chest Rs. 550
+    _, p_fry_leg, _ = resolve_menu_item_price("Chicken Sobat (Fry Pieces)", "Leg", 0, menu_items)
+    assert p_fry_leg == 520.0, f"Expected 520 for Fry Leg, got {p_fry_leg}"
+    _, p_fry_chest, _ = resolve_menu_item_price("Chicken Sobat (Fry Pieces)", "Chest", 0, menu_items)
+    assert p_fry_chest == 550.0, f"Expected 550 for Fry Chest, got {p_fry_chest}"
+    print(f"  [OK] Chicken Sobat (Fry Pieces): Leg=Rs.{p_fry_leg}, Chest=Rs.{p_fry_chest}")
+
+    # Simple Sobat Rs. 220
+    _, p_simple, _ = resolve_menu_item_price("Simple Sobat", "", 0, menu_items)
+    assert p_simple == 220.0, f"Expected 220 for Simple Sobat, got {p_simple}"
+    print(f"  [OK] Simple Sobat: Rs.{p_simple}")
+
+    # Bill for 1 BBQ piece sobat + 1 Fried piece sobat = 530 + 520 = 1050
+    calc_combo = await calculate_bill([{"name": "1 bbq piece sobat and one fried piece", "quantity": 1}], order_type="Takeaway")
+    assert calc_combo["total_bill"] == 1050.0, f"Expected 1050, got {calc_combo['total_bill']}"
+    print(f"  [OK] Combined Bill: 1x BBQ (Rs.530) + 1x Fried (Rs.520) = Rs.{calc_combo['total_bill']}")
+
+    # ---------------------------------------------------------
+    # 3. Delivery Address Prompt Rules Tests
+    # ---------------------------------------------------------
+    print("\n[3/4] Testing Delivery Address Prompt Restrictions...")
+    assert "Aapka naam aur *delivery address* bata dein" in SYSTEM_BASE_INSTRUCTIONS
+    assert "(area, gali, ghar number)" not in SYSTEM_BASE_INSTRUCTIONS
+    assert "BBQ PIECE VS FRIED PIECE FARQ" in SYSTEM_BASE_INSTRUCTIONS
+    print("  [OK] Address prompt: Asks for delivery address ONLY (no gali, street, ghar number, landmark)")
+
+    # ---------------------------------------------------------
+    # 4. Roti and Maana Pricing Tests
+    # ---------------------------------------------------------
+    print("\n[4/4] Testing Roti and Maana Pricing...")
+    _, p_manna, _ = resolve_menu_item_price("8 manny", "", 0, menu_items)
+    assert p_manna == 30.0, f"Expected 30 for Maana, got {p_manna}"
+    _, p_roti, _ = resolve_menu_item_price("4 tanoor roti", "", 0, menu_items)
+    assert p_roti == 20.0, f"Expected 20 for Tandoori Roti, got {p_roti}"
+    print(f"  [OK] Maana = Rs.{p_manna}, Tandoori Roti = Rs.{p_roti}")
+
+    print("\n==================================================")
+    print("SUCCESS: ALL UNIVERSAL TESTS PASSED!")
+    print("==================================================")
+
+
+if __name__ == "__main__":
+    asyncio.run(run_tests())
