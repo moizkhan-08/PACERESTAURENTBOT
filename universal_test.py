@@ -101,7 +101,14 @@ async def run_tests():
     # Bill for 1 BBQ piece sobat + 1 Fried piece sobat = 530 + 520 = 1050
     calc_combo = await calculate_bill([{"name": "1 bbq piece sobat and one fried piece", "quantity": 1}], order_type="Takeaway")
     assert calc_combo["total_bill"] == 1050.0, f"Expected 1050, got {calc_combo['total_bill']}"
+    assert "Delivery charges will apply" not in calc_combo["formatted_summary"]
     print(f"  [OK] Combined Bill: 1x BBQ (Rs.530) + 1x Fried (Rs.520) = Rs.{calc_combo['total_bill']}")
+
+    # Delivery order formatted_summary MUST mention "Delivery charges will apply" without exact amount
+    calc_delivery = await calculate_bill([{"name": "Chicken Sobat", "quantity": 1}], order_type="Delivery")
+    assert "Delivery charges will apply" in calc_delivery["formatted_summary"]
+    assert "Rs." not in calc_delivery["formatted_summary"].split("Delivery charges")[1].split("\n")[0]
+    print(f"  [OK] Delivery Order Summary correctly mentions 'Delivery charges will apply' (no exact fee)")
 
     # ---------------------------------------------------------
     # 3. Delivery Address Prompt Rules Tests

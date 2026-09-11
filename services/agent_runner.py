@@ -371,6 +371,8 @@ async def run_agent_loop(
         sub_str = f", Subtotal: Rs. {session['subtotal']:,.0f}" if session.get("subtotal") else ""
         thal_str = f", Thal Deposit: Rs. {session['thal_deposit']:,.0f}" if session.get("thal_deposit") else ""
         context_note += f" [Verified Bill: Rs. {session['total_bill']:,.0f}{sub_str}{thal_str} - DO NOT RECALCULATE OR MULTIPLY]"
+    if session.get("order_type", "").strip().lower() == "delivery":
+        context_note += " [Delivery Order: Include '🛵 Delivery charges will apply' in Order Summary. DO NOT state any exact delivery fee amount]"
     messages.append({"role": "system", "content": context_note})
 
     # Add past turn history (last 12 turns for better order flow context)

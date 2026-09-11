@@ -653,6 +653,8 @@ async def calculate_bill(
             summary_lines.append(f"• 1x *{it['name']}*{var_label} — Rs. {it['line_total']:,.0f}")
     if thal_deposit > 0:
         summary_lines.append(f"• *Thal Deposit ({int(effective_thal_count)}x)* — Rs. {thal_deposit:,.0f} (refundable)")
+    if is_delivery:
+        summary_lines.append("🛵 *Delivery charges will apply*")
     summary_lines.append(f"💰 *Total: Rs. {total_bill:,.0f}*")
     formatted_summary = "\n".join(summary_lines)
 

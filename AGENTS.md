@@ -126,6 +126,8 @@ The bot strictly guides the customer through these 7 progressive steps (`service
    ─────────────────
    🛒 *Items:*
    • [qty]x *[item]* — Rs. [price]
+   • *Thal Deposit (1x)* — Rs. 300 (refundable) [if applicable]
+   🛵 *Delivery charges will apply* [Delivery orders only]
    ─────────────────
    💰 *Total: Rs. [total]*
    💳 Cash on Delivery / Counter
@@ -192,6 +194,8 @@ All financial, state, and menu operations are strictly controlled in Python code
     * When "Kabli Pulao" is requested, clarify Beef (Rs. 800), Mutton (Rs. 950), or Sada (Rs. 300).
 15. **Beverages & Soft Drink Sizes:**
     * Clarify 1.5 Liter (Rs. 220), 1 Liter (Rs. 170), or Regular (Rs. 60). Mineral Water: Large (Rs. 100), Small (Rs. 60).
+16. **Delivery Charges Notice:**
+    * For Delivery orders, the bot must explicitly mention in the Order Summary that delivery charges will apply (`🛵 *Delivery charges will apply*`), but strictly do NOT mention or calculate an exact amount for delivery charges.
 
 ---
 
