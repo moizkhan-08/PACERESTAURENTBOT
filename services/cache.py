@@ -123,6 +123,60 @@ class RedisClientWrapper:
             del self._fallback_store[k]
         return valid_keys
 
+    # ── Redis Set operations (for soldout items) ──
+
+    async def sadd(self, key: str, *values: str) -> int:
+        """Add one or more members to a Redis Set."""
+        if self._is_connected and self._redis:
+            try:
+                return await self._redis.sadd(key, *values)
+            except Exception as e:
+                logger.warning("Redis SADD failed for %s, using fallback: %s", key, e)
+        # Fallback: store as a Python set serialized in the dict
+        entry = self._fallback_store.get(key)
+        if entry is None:
+            s = set()
+        else:
+            s = entry[0] if isinstance(entry[0], set) else set()
+        added = 0
+        for v in values:
+            if v not in s:
+                s.add(v)
+                added += 1
+        self._fallback_store[key] = (s, None)
+        return added
+
+    async def srem(self, key: str, *values: str) -> int:
+        """Remove one or more members from a Redis Set."""
+        if self._is_connected and self._redis:
+            try:
+                return await self._redis.srem(key, *values)
+            except Exception as e:
+                logger.warning("Redis SREM failed for %s, using fallback: %s", key, e)
+        entry = self._fallback_store.get(key)
+        if entry is None:
+            return 0
+        s = entry[0] if isinstance(entry[0], set) else set()
+        removed = 0
+        for v in values:
+            if v in s:
+                s.discard(v)
+                removed += 1
+        self._fallback_store[key] = (s, None)
+        return removed
+
+    async def smembers(self, key: str) -> set:
+        """Return all members of a Redis Set."""
+        if self._is_connected and self._redis:
+            try:
+                return await self._redis.smembers(key)
+            except Exception as e:
+                logger.warning("Redis SMEMBERS failed for %s, using fallback: %s", key, e)
+        entry = self._fallback_store.get(key)
+        if entry is None:
+            return set()
+        return entry[0] if isinstance(entry[0], set) else set()
+
 
 redis_client = RedisClientWrapper()
 

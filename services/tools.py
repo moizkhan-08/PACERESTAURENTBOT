@@ -63,11 +63,22 @@ async def warm_menu_cache() -> list[dict]:
     return []
 
 
+async def get_soldout_items() -> set:
+    """Returns the set of currently sold-out item names (lowercased) from Redis."""
+    try:
+        members = await redis_client.smembers("soldout:items")
+        if members:
+            return {m.lower() if isinstance(m, str) else m.decode().lower() for m in members}
+    except Exception as e:
+        logger.warning("Failed to read soldout items from Redis: %s", e)
+    return set()
+
 async def read_menu(category: Optional[str] = None, search: Optional[str] = None) -> list[dict]:
     """
     Fetches available menu items.
     Cached in Redis for 24h to reduce DB load and ensure sub-5ms responses.
     Supports filtering by category or searching item name.
+    Automatically excludes items marked as sold out via /soldout admin command.
     """
     cache_key = "cache:menu_items"
     items = []
@@ -80,6 +91,11 @@ async def read_menu(category: Optional[str] = None, search: Optional[str] = None
 
     if not items:
         items = await warm_menu_cache()
+
+    # ── Filter out sold-out items ──
+    soldout = await get_soldout_items()
+    if soldout:
+        items = [it for it in items if it.get("name", "").strip().lower() not in soldout]
 
     query = search or category
     if query:
@@ -596,6 +612,32 @@ async def calculate_bill(
     """
     menu_items = await read_menu()
     items = decompose_sobat_items(items)
+
+    # ── Sold-out item validation ──
+    soldout = await get_soldout_items()
+    soldout_found = []
+    if soldout:
+        for raw_item in items:
+            item_name = (raw_item.get("name") or "").strip().lower()
+            item_clean = re.sub(r'^\d+\s*(x|nafri|plate|plates)?\s*', '', item_name, flags=re.I).strip()
+            for so_item in soldout:
+                if so_item in item_clean or item_clean in so_item:
+                    soldout_found.append(raw_item.get("name", item_name))
+                    break
+    if soldout_found:
+        return {
+            "error": True,
+            "soldout_items": soldout_found,
+            "message": f"Maaf kijiye, yeh items abhi dastiyab nahi hain (Sold Out): {', '.join(soldout_found)}. Koi aur item try karein? 😊",
+            "items": [],
+            "subtotal": 0,
+            "thal_deposit": 0,
+            "total_bill": 0,
+            "formatted_summary": "",
+            "order_type": order_type,
+            "meets_minimum_delivery": False,
+            "minimum_required": settings.MINIMUM_DELIVERY_ORDER
+        }
 
     subtotal = 0.0
     parsed_items = []

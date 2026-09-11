@@ -126,7 +126,8 @@ async def handle_admin_command(
         "deactivate", "off", "stop",
         "maintenance", "maint",
         "mute", "unmute",
-        "clearcache", "clear-cache", "refreshmenu"
+        "clearcache", "clear-cache", "refreshmenu",
+        "soldout", "sold-out", "available"
     }
 
     if raw_cmd not in known_commands:
@@ -190,11 +191,53 @@ async def handle_admin_command(
         await invalidate_menu_cache()
         response_msg = "🗑️ *Menu Cache Flushed*\nLive menu will reload fresh from database on the next query."
 
+    # ── 4b. Sold Out / Available Item Toggle ──
+    elif command in {"soldout", "sold-out"}:
+        if not args:
+            response_msg = (
+                "⚠️ *Usage:*\n"
+                "• `/soldout <item name>` — Mark item as sold out\n"
+                "• `/soldout list` — Show all sold-out items\n"
+                "• `/soldout clear` — Clear all sold-out items"
+            )
+        elif args[0].lower() == "list":
+            members = await redis_client.smembers("soldout:items")
+            if members:
+                items_list = sorted(m if isinstance(m, str) else m.decode() for m in members)
+                lines = ["❌ *Currently Sold Out Items:*", "────────────────────"]
+                for i, item in enumerate(items_list, 1):
+                    lines.append(f"{i}. {item.title()}")
+                lines.append("────────────────────")
+                lines.append("💡 Use `/available <item>` to restore")
+                response_msg = "\n".join(lines)
+            else:
+                response_msg = "✅ *No items are currently sold out.* Full menu is available!"
+        elif args[0].lower() == "clear":
+            await redis_client.delete("soldout:items")
+            response_msg = "✅ *All Sold-Out Flags Cleared*\nEntire menu is now available again."
+        else:
+            item_name = " ".join(args).strip().lower()
+            await redis_client.sadd("soldout:items", item_name)
+            response_msg = f"❌ *Item Marked Sold Out*\n*{item_name.title()}* is now marked as sold out. Customers will be informed it's unavailable.\n💡 Use `/available {item_name}` to restore."
+
+    elif command == "available":
+        if not args:
+            response_msg = "⚠️ *Usage:* `/available <item name>` — Restore a sold-out item back to menu"
+        else:
+            item_name = " ".join(args).strip().lower()
+            removed = await redis_client.srem("soldout:items", item_name)
+            if removed:
+                response_msg = f"✅ *Item Restored*\n*{item_name.title()}* is now available again on the menu!"
+            else:
+                response_msg = f"ℹ️ *{item_name.title()}* was not in the sold-out list. It's already available."
+
     # ── 5. Bot Status ──
     elif command == "status":
         bot_active = await redis_client.get("flag:bot_active") != "0"
         maint = await redis_client.get("flag:maintenance_only")
         mutes = await redis_client.keys("mute:*")
+        soldout_members = await redis_client.smembers("soldout:items")
+        soldout_count = len(soldout_members) if soldout_members else 0
         hours = get_hours_info()
         today_data = await db.get_today_orders_with_stats()
         stats = today_data.get("stats", {})
@@ -207,6 +250,7 @@ async def handle_admin_command(
             f"🚪 *Restaurant:* {'Open' if hours.get('is_open') else 'Closed'}\n"
             f"🛠️ *Maintenance:* {maint if maint else 'Off'}\n"
             f"🔇 *Muted Customers:* {len(mutes)}\n"
+            f"❌ *Sold Out Items:* {soldout_count}\n"
             f"────────────────────\n"
             f"📦 *Today's Orders:* {stats.get('total_orders', 0)}\n"
             f"💰 *Today's Revenue:* Rs. {stats.get('total_revenue', 0):,.0f}\n"
@@ -266,6 +310,10 @@ async def handle_admin_command(
             f"────────────────────\n"
             f"• `/status` — View live bot status & today's sales\n"
             f"• `/orders` — View today's orders & revenue breakdown\n"
+            f"• `/soldout <item>` — Mark item as sold out\n"
+            f"• `/soldout list` — View all sold-out items\n"
+            f"• `/soldout clear` — Clear all sold-out flags\n"
+            f"• `/available <item>` — Restore sold-out item\n"
             f"• `/testmode on|off` — Force Full Menu open for testing\n"
             f"• `/reset [phone]` — Clear session history for fresh test\n"
             f"• `/activate` — Enable automated AI order-taking\n"
@@ -276,7 +324,7 @@ async def handle_admin_command(
             f"• `/unmute all` — Clear all customer mutes\n"
             f"• `/clear-cache` — Force reload menu from DB\n"
             f"────────────────────\n"
-            f"💡 *Tip:* You can also type commands without `/` (e.g. `status`, `testmode on`)"
+            f"💡 *Tip:* You can also type commands without `/` (e.g. `status`, `soldout chicken fried rice`)"
         )
 
     else:

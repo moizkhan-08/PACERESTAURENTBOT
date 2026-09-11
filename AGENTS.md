@@ -210,6 +210,10 @@ Admins can manage the bot directly inside WhatsApp by sending commands to the bo
 | `/deactivate` or `bot off` | Pauses automated order taking globally (`flag:bot_active = "0"`). |
 | `/activate` or `bot on` | Resumes automated order taking (`flag:bot_active = "1"`). |
 | `/orders` or `/today` | Summarizes today's total orders and revenue. |
+| `/soldout <item>` | Marks a menu item as sold out. Customers will be told it's unavailable. |
+| `/soldout list` | Shows all currently sold-out items. |
+| `/soldout clear` | Clears all sold-out flags (entire menu available again). |
+| `/available <item>` | Restores a sold-out item back to the active menu. |
 | `/clearcache` or `/refreshmenu` | Flushes and re-warms the Redis menu cache from Supabase. |
 | `/mute <phone>` / `/unmute <phone>` | Mutes or unmutes a specific disruptive customer. |
 | `agent47 <command>` | Emergency bypass prefix — allows executing any admin command from any phone number. |
