@@ -181,9 +181,15 @@ def resolve_menu_item_price(
 
     db_lookup = {}
     for mi in sorted_menu:
-        k = mi.get("name", "").strip().lower()
-        if k and k not in db_lookup:
-            db_lookup[k] = (mi["name"], float(mi.get("price", 0.0)), mi.get("variant") or "")
+        raw_k = mi.get("name", "").strip().lower()
+        if not raw_k:
+            continue
+        val = (mi["name"], float(mi.get("price", 0.0)), mi.get("variant") or "")
+        norm_k = re.sub(r'\s+', ' ', re.sub(r'[\(\)\[\],/]', ' ', raw_k)).strip()
+        if raw_k not in db_lookup:
+            db_lookup[raw_k] = val
+        if norm_k not in db_lookup:
+            db_lookup[norm_k] = val
 
     matched_item = None
 
@@ -235,23 +241,36 @@ def resolve_menu_item_price(
 
     # Priority 2: Exact case-insensitive match in DB for all non-Sobat dishes
     if not matched_item:
-        if clean in db_lookup:
-            matched_item = db_lookup[clean]
-        elif raw_name_clean.lower() in db_lookup:
-            matched_item = db_lookup[raw_name_clean.lower()]
-        elif var_clean and f"{clean} {var_clean}" in db_lookup:
-            matched_item = db_lookup[f"{clean} {var_clean}"]
+        clean_combined = f"{clean} {var_clean}".strip()
+        clean_norm = re.sub(r'\s+', ' ', clean_no_punct).strip()
+        clean_comb_norm = re.sub(r'\s+', ' ', f"{clean_no_punct} {var_clean}").strip()
+        if var_clean:
+            candidates = [clean_combined, clean_comb_norm, clean, clean_norm, raw_name_clean.lower()]
+        else:
+            candidates = [clean, clean_norm, raw_name_clean.lower()]
+        for cand in candidates:
+            if cand and cand in db_lookup:
+                matched_item = db_lookup[cand]
+                break
 
-    # Priority 3: Karahi & Handi items
+    # Priority 3: Karahi & Handi items (Prefer modern mixed-case category prices)
     if not matched_item and ("karahi" in clean or "handi" in clean):
         is_half = "half" in clean or "half" in var_clean
         dish_type = "karahi" if "karahi" in clean else "handi"
         meat_type = "mutton" if "mutton" in clean else "chicken"
+        style = "achari" if "achari" in clean else ("white" if "white" in clean else ("boneless" if "boneless" in clean else ("namkeen" if "namkeen" in clean else ("peshawari" if "peshawari" in clean else ""))))
         for it in sorted_menu:
+            if it.get("category", "").isupper():
+                continue
             n = it.get("name", "").lower()
             if dish_type in n and meat_type in n:
+                if style and style not in n:
+                    continue
                 if is_half and "half" in n:
                     matched_item = (it["name"], float(it["price"]), "Half")
+                    break
+                elif not is_half and "full" in n:
+                    matched_item = (it["name"], float(it["price"]), "Full")
                     break
                 elif not is_half and "full" in n:
                     matched_item = (it["name"], float(it["price"]), "Full")

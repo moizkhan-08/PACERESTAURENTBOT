@@ -57,6 +57,7 @@ class Settings(BaseSettings):
     DASHBOARD_PORT: int = Field(default=4434)
     DEBUG: bool = Field(default=False)
     ORDER_CONFIRM_TIMEOUT_MIN: int = Field(default=10)
+    SESSION_TTL_MINUTES: int = Field(default=90, description="Customer session idle timeout in minutes (Redis)")
     WAHA_ENABLED: bool = Field(default=True)
 
     # ── Anti-Ban & Humanization Delays ──

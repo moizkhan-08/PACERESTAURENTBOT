@@ -122,6 +122,44 @@ async def run_tests():
     assert p_roti == 20.0, f"Expected 20 for Tandoori Roti, got {p_roti}"
     print(f"  [OK] Maana = Rs.{p_manna}, Tandoori Roti = Rs.{p_roti}")
 
+    # ---------------------------------------------------------
+    # 5. Non-Sobat Variations: Standalone Pieces & Handi/Karahi
+    # ---------------------------------------------------------
+    print("\n[5/5] Testing Standalone Pieces & Handi/Karahi Variations...")
+    
+    # Standalone Fry Piece (Appetizer, NOT Sobat)
+    r_fry_leg, p_fry_leg, _ = resolve_menu_item_price("Chicken Fry Piece", "Leg", 0, menu_items)
+    assert p_fry_leg == 350.0, f"Expected 350 for Standalone Fry Leg, got {p_fry_leg}"
+    assert "Sobat" not in r_fry_leg
+    print(f"  [OK] Standalone Chicken Fry Piece (Leg) = Rs. {p_fry_leg} (Correct Appetizer, not Sobat)")
+
+    r_fry_chest, p_fry_chest, _ = resolve_menu_item_price("Chicken Fry Piece", "Chest", 0, menu_items)
+    assert p_fry_chest == 370.0, f"Expected 370 for Standalone Fry Chest, got {p_fry_chest}"
+    assert "Sobat" not in r_fry_chest
+    print(f"  [OK] Standalone Chicken Fry Piece (Chest) = Rs. {p_fry_chest}")
+
+    # Standalone Tikka Piece (BBQ, NOT Sobat)
+    r_tikka_leg, p_tikka_leg, _ = resolve_menu_item_price("Chicken Tikka Piece", "Leg", 0, menu_items)
+    assert p_tikka_leg == 360.0, f"Expected 360 for Tikka Leg, got {p_tikka_leg}"
+    print(f"  [OK] Chicken Tikka Piece (Leg) = Rs. {p_tikka_leg}")
+
+    r_tikka_chest, p_tikka_chest, _ = resolve_menu_item_price("Chicken Tikka Piece", "Chest", 0, menu_items)
+    assert p_tikka_chest == 380.0, f"Expected 380 for Tikka Chest, got {p_tikka_chest}"
+    print(f"  [OK] Chicken Tikka Piece (Chest) = Rs. {p_tikka_chest}")
+
+    # Handi & Karahi Half vs Full
+    _, p_handi_half, _ = resolve_menu_item_price("Chicken Boneless Handi", "Half", 0, menu_items)
+    assert p_handi_half == 900.0, f"Expected 900 for Handi Half, got {p_handi_half}"
+    _, p_handi_full, _ = resolve_menu_item_price("Chicken Boneless Handi", "Full", 0, menu_items)
+    assert p_handi_full == 1700.0, f"Expected 1700 for Handi Full, got {p_handi_full}"
+    print(f"  [OK] Chicken Boneless Handi: Half = Rs. {p_handi_half}, Full = Rs. {p_handi_full}")
+
+    _, p_karahi_half, _ = resolve_menu_item_price("Chicken Peshawari Karahi", "Half", 0, menu_items)
+    assert p_karahi_half == 850.0, f"Expected 850 for Karahi Half, got {p_karahi_half}"
+    _, p_karahi_full, _ = resolve_menu_item_price("Chicken Peshawari Karahi", "Full", 0, menu_items)
+    assert p_karahi_full == 1700.0, f"Expected 1700 for Karahi Full, got {p_karahi_full}"
+    print(f"  [OK] Chicken Peshawari Karahi: Half = Rs. {p_karahi_half}, Full = Rs. {p_karahi_full}")
+
     print("\n==================================================")
     print("SUCCESS: ALL UNIVERSAL TESTS PASSED!")
     print("==================================================")

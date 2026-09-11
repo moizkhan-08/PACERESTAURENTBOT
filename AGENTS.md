@@ -72,7 +72,7 @@ PACEMAIN/
 │   ├── tools.py              # Deterministic tools (read_menu, calculate_bill, save_order, etc.)
 │   ├── whatsapp.py           # WAHA HTTP client wrapper with retry & dead-letter logging
 │   ├── hours.py              # Pakistan Standard Time (PKT) shift & operational hours logic
-│   ├── session.py            # Redis session storage, TTL, and order confirmation keys
+│   ├── session.py            # Redis session storage, 90-min TTL, and order confirmation keys
 │   ├── db.py                 # Async Supabase DB client with error handling
 │   ├── cache.py              # Redis client wrapper with in-memory fallback for test runs
 │   ├── audio.py              # Whisper voice note downloader and transcriber
@@ -182,6 +182,16 @@ All financial, state, and menu operations are strictly controlled in Python code
       - **Maana (Manna):** Aliases (`manny`, `manna`, `mana`, `maana`, `maane`, `mane`) deterministically resolve to **Rs. 30** each.
       - **Tandoori Roti:** Aliases (`roti`, `tanoor roti`, `tandoor roti`, `tandoori roti`) deterministically resolve to **Rs. 20** each.
       - **Roti / Maana Per Head:** Resolves to **Rs. 60** per head only when explicitly requested.
+12. **Karahi & Handi Portion Sizing (Half vs Full):**
+    * If customer does not specify Half or Full, the bot must prompt: *"Half chahiye ya Full? (Half: 2–3 afraad, Full: 4–5 afraad) 😊"*.
+    * Correct pricing: Chicken Peshawari Karahi (Half Rs. 850 / Full Rs. 1700), Chicken Boneless Handi (Half Rs. 900 / Full Rs. 1700).
+13. **Standalone Chicken Pieces vs Sobat Pieces:**
+    * "Chicken Fry Piece" (Leg Rs. 350 / Chest Rs. 370) and "Chicken Tikka Piece" (Leg Rs. 360 / Chest Rs. 380) ordered alone are Appetizers/BBQ dry items.
+    * Sobat chicken pieces are priced higher as complete meals: Chicken Sobat Fry Pieces (Leg Rs. 520 / Chest Rs. 550) and BBQ Chicken Sobat (Leg Rs. 530 / Chest Rs. 560).
+14. **Rice & Pulao Clarifications:**
+    * When "Kabli Pulao" is requested, clarify Beef (Rs. 800), Mutton (Rs. 950), or Sada (Rs. 300).
+15. **Beverages & Soft Drink Sizes:**
+    * Clarify 1.5 Liter (Rs. 220), 1 Liter (Rs. 170), or Regular (Rs. 60). Mineral Water: Large (Rs. 100), Small (Rs. 60).
 
 ---
 
