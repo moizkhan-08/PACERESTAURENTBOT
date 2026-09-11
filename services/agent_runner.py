@@ -16,7 +16,8 @@ from services.tools import (
     check_returning_customer,
     save_order_record,
     notify_admins_and_kitchen,
-    report_complaint
+    report_complaint,
+    get_soldout_items
 )
 from services.prompts import (
     OPEN_AGENT_PROMPT,
@@ -39,7 +40,7 @@ AGENT_TOOLS = [
         "type": "function",
         "function": {
             "name": "read_menu",
-            "description": "Reads live Pace Restaurant menu items, categories, variants, and prices from the database. Call this whenever a customer asks about prices, dish options, or what is available.",
+            "description": "Reads live Pace Restaurant menu items, categories, variants, and prices from the database. Automatically excludes any sold-out items. Call this whenever a customer asks about dish availability, prices, dish options, or what is available.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -366,6 +367,21 @@ async def _execute_agent_turn(
         context_note += f" [Verified Bill: Rs. {session['total_bill']:,.0f}{sub_str}{thal_str} - DO NOT RECALCULATE OR MULTIPLY]"
     if session.get("order_type", "").strip().lower() == "delivery":
         context_note += " [Delivery Order: Include '🛵 Delivery charges will apply' in Order Summary. DO NOT state any exact delivery fee amount]"
+
+    # ── Real-Time Sold-Out Items Injection ──
+    soldout_items = await get_soldout_items()
+    if soldout_items:
+        soldout_str = ", ".join(sorted(s.title() for s in soldout_items))
+        first_example = list(soldout_items)[0].title()
+        context_note += (
+            f" [⚠️ CURRENTLY SOLD OUT ITEMS: {soldout_str}. "
+            f"These items are 100% SOLD OUT / KHATAM for today. "
+            f"If customer asks about their availability (e.g. 'do you have {first_example}?', '{first_example} hai?'), "
+            f"or tries to order them, you MUST explicitly inform them that this item is SOLD OUT / KHATAM today: "
+            f"'Maaf kijiye ga, aaj {soldout_str} khatam ho gaya hai (sold out) 😊' and suggest other available menu items. "
+            f"NEVER say sold out items are available!]"
+        )
+
     messages.append({"role": "system", "content": context_note})
 
     # Add past turn history (last 12 turns for better order flow context)

@@ -73,6 +73,52 @@ async def get_soldout_items() -> set:
         logger.warning("Failed to read soldout items from Redis: %s", e)
     return set()
 
+
+def is_item_sold_out(item_name: str, soldout_set: set) -> bool:
+    """
+    Determines if a menu item or ordered item matches any sold-out entry.
+    Supports:
+    - Exact match: "sobat" == "sobat"
+    - Substring / word boundary matches:
+      e.g. sold-out "sobat" matches "Chicken Sobat (Fry Pieces) Leg", "Simple Sobat", "BBQ Chicken Sobat"
+      e.g. sold-out "chicken fried rice" matches "Chicken Fried Rice"
+      e.g. sold-out "karahi" matches "Chicken Peshawari Karahi", "Mutton Peshawari Karahi"
+    """
+    if not soldout_set or not item_name:
+        return False
+
+    name_clean = item_name.strip().lower()
+    # Strip quantity/portion prefix like '1x', '2 nafri', '2x'
+    name_clean = re.sub(r'^\d+\s*(x|nafri|plate|plates)?\s*', '', name_clean, flags=re.I).strip()
+    name_tokens = set(re.findall(r'[a-zA-Z0-9]+', name_clean))
+    if not name_tokens:
+        return False
+
+    for so in soldout_set:
+        so_clean = so.strip().lower()
+        if not so_clean:
+            continue
+        if so_clean == name_clean:
+            return True
+        # Direct substring if multi-word (e.g. "chicken fried rice" in "Pace Special Chicken Fried Rice")
+        if " " in so_clean and so_clean in name_clean:
+            return True
+        so_tokens = set(re.findall(r'[a-zA-Z0-9]+', so_clean))
+        if not so_tokens:
+            continue
+        # If all words in the sold-out keyword are in the item name
+        # e.g. sold-out "sobat" in {"chicken", "sobat", "fry", "pieces"} -> True
+        # e.g. sold-out "chicken karahi" in {"chicken", "peshawari", "karahi"} -> True
+        if so_tokens.issubset(name_tokens):
+            return True
+        # If all words in item name are in sold-out keyword
+        # e.g. item "sobat" when soldout keyword is "chicken sobat" -> True
+        if name_tokens.issubset(so_tokens):
+            return True
+
+    return False
+
+
 async def read_menu(category: Optional[str] = None, search: Optional[str] = None) -> list[dict]:
     """
     Fetches available menu items.
@@ -95,7 +141,7 @@ async def read_menu(category: Optional[str] = None, search: Optional[str] = None
     # ── Filter out sold-out items ──
     soldout = await get_soldout_items()
     if soldout:
-        items = [it for it in items if it.get("name", "").strip().lower() not in soldout]
+        items = [it for it in items if not is_item_sold_out(it.get("name", ""), soldout)]
 
     query = search or category
     if query:
@@ -618,12 +664,9 @@ async def calculate_bill(
     soldout_found = []
     if soldout:
         for raw_item in items:
-            item_name = (raw_item.get("name") or "").strip().lower()
-            item_clean = re.sub(r'^\d+\s*(x|nafri|plate|plates)?\s*', '', item_name, flags=re.I).strip()
-            for so_item in soldout:
-                if so_item in item_clean or item_clean in so_item:
-                    soldout_found.append(raw_item.get("name", item_name))
-                    break
+            item_name = (raw_item.get("name") or "").strip()
+            if is_item_sold_out(item_name, soldout):
+                soldout_found.append(raw_item.get("name", item_name))
     if soldout_found:
         return {
             "error": True,

@@ -18,7 +18,14 @@ PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from services.tools import decompose_sobat_items, resolve_menu_item_price, calculate_bill
+from services.tools import (
+    decompose_sobat_items,
+    resolve_menu_item_price,
+    calculate_bill,
+    is_item_sold_out,
+    read_menu,
+    get_soldout_items
+)
 from services.prompts import (
     SYSTEM_BASE_INSTRUCTIONS,
     OPEN_AGENT_PROMPT,
@@ -32,6 +39,8 @@ from services.agent_runner import (
     execute_designated_agent
 )
 from services.db import db
+from services.cache import redis_client
+from routers.admin_commands import handle_admin_command
 
 
 async def run_tests():
@@ -249,6 +258,84 @@ async def run_tests():
         dest_2am = "open_agent"
     assert dest_2am == "closed_agent", f"Expected closed_agent at 2 AM, got {dest_2am}"
     print("  [OK] Shift Routing: 1:00 PM -> open_agent, 4:30 PM -> afternoon_agent, 2:00 AM -> closed_agent")
+
+    # ---------------------------------------------------------
+    # 7. Sold-Out Item Logic, Menu Filtering & Chat Availability
+    # ---------------------------------------------------------
+    print("\n[7/7] Testing Sold-Out Item Detection & Availability...")
+
+    # 7a. is_item_sold_out unit testing
+    soldout_set = {"sobat"}
+    assert is_item_sold_out("Chicken Sobat (Fry Pieces) Leg", soldout_set) is True
+    assert is_item_sold_out("BBQ Chicken Sobat (Chest)", soldout_set) is True
+    assert is_item_sold_out("Simple Sobat", soldout_set) is True
+    assert is_item_sold_out("Mutton Sobat Platter", soldout_set) is True
+    assert is_item_sold_out("2 nafri sobat", soldout_set) is True
+    assert is_item_sold_out("Chicken Peshawari Karahi", soldout_set) is False
+    assert is_item_sold_out("Chicken Fried Rice", soldout_set) is False
+    print("  [OK] is_item_sold_out: 'sobat' correctly matches all Sobat variants and leaves others available")
+
+    # Multi-word sold out item
+    soldout_rice = {"chicken fried rice"}
+    assert is_item_sold_out("Chicken Fried Rice", soldout_rice) is True
+    assert is_item_sold_out("Egg Fried Rice", soldout_rice) is False
+    print("  [OK] is_item_sold_out: 'chicken fried rice' correctly matches only Chicken Fried Rice")
+
+    # 7b. read_menu() filtering with Redis sold-out set
+    await redis_client.sadd("soldout:items", "sobat")
+    try:
+        filtered_menu = await read_menu()
+        sobat_items = [it for it in filtered_menu if "sobat" in it.get("name", "").lower()]
+        assert len(sobat_items) == 0, f"Expected 0 Sobat items in filtered menu, got {len(sobat_items)}"
+        print(f"  [OK] read_menu(): Excluded all {len(sobat_items)} Sobat items when 'sobat' is in soldout:items")
+
+        # 7c. calculate_bill() rejection
+        calc_res = await calculate_bill([{"name": "Chicken Sobat", "quantity": 1}], order_type="Takeaway")
+        assert calc_res.get("error") is True, "calculate_bill should return error for sold-out item"
+        assert "Sold Out" in calc_res.get("message", ""), "calculate_bill message should state Sold Out"
+        print("  [OK] calculate_bill(): Deterministically rejected sold-out item with clear error message")
+    finally:
+        await redis_client.srem("soldout:items", "sobat")
+
+    # 7d. Admin commands /soldout, /soldout list, /available
+    is_cmd, msg = await handle_admin_command("923306874242@s.whatsapp.net", "/soldout sobat", send_whatsapp=False)
+    assert is_cmd is True
+    assert "Marked Sold Out" in msg
+    print("  [OK] Admin command: '/soldout sobat' succeeded")
+
+    is_cmd, msg = await handle_admin_command("923306874242@s.whatsapp.net", "/soldout list", send_whatsapp=False)
+    assert is_cmd is True
+    assert "Sobat" in msg
+    print("  [OK] Admin command: '/soldout list' displays Sobat")
+
+    is_cmd, msg = await handle_admin_command("923306874242@s.whatsapp.net", "/available sobat", send_whatsapp=False)
+    assert is_cmd is True
+    assert "Item Restored" in msg
+    print("  [OK] Admin command: '/available sobat' restores item")
+
+    # 7e. In-Chat Agent Response when Sobat is Sold Out
+    await redis_client.sadd("soldout:items", "sobat")
+    try:
+        test_session = {"phone": "923306874242", "history": []}
+        reply, tools, agent_used = await execute_designated_agent(
+            phone="923306874242",
+            user_text="do you have sobat?",
+            session=test_session,
+            hours=sim_open_hours,
+            dispatch_mode="simulator",
+            override_shift="full_menu"
+        )
+        lower_reply = reply.lower()
+        safe_reply = reply.encode("ascii", "backslashreplace").decode("ascii")
+        print(f"  [Agent Reply to 'do you have sobat?']: \"{safe_reply}\"")
+        # Ensure bot explains sobat is sold out / khatam / nahi and does NOT say it is available
+        assert any(w in lower_reply for w in ["khatam", "sold out", "maaf", "nahi hai", "unavailable", "dastiyab nahi"]), \
+            f"Expected sold out explanation in reply, got: {reply}"
+        assert "ji haan" not in lower_reply and "ji bilkul" not in lower_reply, \
+            f"Bot should NOT say 'ji haan' or 'ji bilkul' when item is sold out! Reply: {reply}"
+        print("  [OK] Agent Turn: Customer asked 'do you have sobat?' and bot correctly responded it is SOLD OUT!")
+    finally:
+        await redis_client.srem("soldout:items", "sobat")
 
     print("\n==================================================")
     print("SUCCESS: ALL UNIVERSAL TESTS PASSED!")
