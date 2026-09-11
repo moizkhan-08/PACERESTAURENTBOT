@@ -19,6 +19,9 @@ from services.tools import (
     report_complaint
 )
 from services.prompts import (
+    OPEN_AGENT_PROMPT,
+    AFTERNOON_AGENT_PROMPT,
+    CLOSED_AGENT_PROMPT,
     FULL_MENU_SYSTEM_PROMPT,
     SOBAT_ONLY_SYSTEM_PROMPT,
     CLOSED_SYSTEM_PROMPT
@@ -176,6 +179,14 @@ AGENT_TOOLS = [
     }
 ]
 
+# ── Agent-Specific Tool Sets ──
+OPEN_AGENT_TOOLS = AGENT_TOOLS
+AFTERNOON_AGENT_TOOLS = AGENT_TOOLS
+# Closed agent strictly has NO order taking, calculating, or kitchen notification tools
+CLOSED_AGENT_TOOLS = [
+    t for t in AGENT_TOOLS if t["function"]["name"] in ("read_menu", "send_menu_images", "report_complaint")
+]
+
 
 async def execute_tool_call(
     tool_name: str,
@@ -319,48 +330,30 @@ async def execute_tool_call(
     return tool_result, new_order_record
 
 
-async def run_agent_loop(
+async def _execute_agent_turn(
     phone: str,
     user_text: str,
     session: dict,
     system_prompt: str,
+    tools: list[dict],
+    context_status_note: str,
     hours: dict,
     dispatch_mode: str = "whatsapp",
     waha_session: Optional[str] = None,
-    sender_jid: Optional[str] = None
+    sender_jid: Optional[str] = None,
+    allow_ordering: bool = True
 ) -> tuple[str, list[dict]]:
     """
-    Core OpenAI tool-calling execution loop. Shared between WhatsApp and Web Simulator.
-    
-    Returns: (final_reply_text, list_of_executed_tool_calls)
+    Underlying resilient OpenAI turn execution engine.
+    Called by run_open_agent, run_afternoon_agent, and run_closed_agent with their dedicated
+    system prompts, tool schemas, and operational instructions.
     """
     # Build conversation messages
     history = session.get("history", [])
     messages = [{"role": "system", "content": system_prompt}]
-    
-    # Inject context metadata for smarter, personalized responses
-    time_pkt = hours.get("current_time_pkt", "")
-    # Determine time-of-day period for greeting style
-    time_period = "day"
-    try:
-        hour_num = int(time_pkt.split(":")[0])
-        ampm = time_pkt.strip()[-2:].upper()
-        if ampm == "PM" and hour_num != 12:
-            hour_num += 12
-        elif ampm == "AM" and hour_num == 12:
-            hour_num = 0
-        if 6 <= hour_num < 12:
-            time_period = "morning"
-        elif 12 <= hour_num < 17:
-            time_period = "afternoon"
-        elif 17 <= hour_num < 21:
-            time_period = "evening"
-        else:
-            time_period = "night"
-    except Exception:
-        pass
 
-    context_note = f"[Customer Phone: {phone}] [Time PKT: {time_pkt}] [Time Period: {time_period}]"
+    time_pkt = hours.get("current_time_pkt", "")
+    context_note = f"[Customer Phone: {phone}] [Time PKT: {time_pkt}] {context_status_note}"
     if session.get("name"):
         context_note += f" [Returning Customer Name: {session['name']}]"
     if session.get("address"):
@@ -386,7 +379,7 @@ async def run_agent_loop(
     latest_order_record = None
     executed_tools = []
 
-    # Deterministic trigger: send_menu_images ONLY on first greeting OR explicit menu request
+    # Deterministic trigger: send_menu_images on first greeting OR explicit menu request
     user_words = set(user_text.lower().split())
     menu_triggers = {"menu", "card", "tasweer", "tasweerein", "pic", "pics", "photo", "photos", "menyu"}
     force_menu = bool(user_words.intersection(menu_triggers)) or any(t in user_text.lower() for t in ["menu dikhao", "menu bhejo", "menu card", "show menu"])
@@ -400,11 +393,10 @@ async def run_agent_loop(
     )
     is_first_interaction = len(history) == 0 or not any(h.get("role") == "assistant" for h in history)
 
-    # Menu pics ONLY on: (1) first interaction greeting, or (2) user explicitly asks for menu
     should_send_menu = force_menu or (is_first_interaction and is_greeting)
 
     if is_greeting and is_first_interaction:
-        if not hours.get("is_open", True):
+        if not allow_ordering:
             messages.append({
                 "role": "system",
                 "content": (
@@ -437,8 +429,8 @@ async def run_agent_loop(
             response = await openai_client.chat.completions.create(
                 model=settings.OPENAI_MODEL,
                 messages=messages,
-                tools=AGENT_TOOLS,
-                tool_choice=tool_choice,
+                tools=tools if tools else None,
+                tool_choice=tool_choice if tools else "none",
                 temperature=0.4,
                 max_tokens=500
             )
@@ -448,7 +440,6 @@ async def run_agent_loop(
 
             if not assistant_msg.tool_calls:
                 final_reply = assistant_msg.content or ""
-                # NEVER leave customer with empty reply — retry once
                 if not final_reply.strip() and turn_idx == 0:
                     logger.warning("Empty reply from model for %s, retrying once", phone)
                     messages.append({"role": "user", "content": "(Customer is waiting for your response. Please reply helpfully.)"})
@@ -479,7 +470,6 @@ async def run_agent_loop(
                     "result": tool_result
                 })
 
-                # Append tool response
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tool_call.id,
@@ -487,9 +477,8 @@ async def run_agent_loop(
                     "content": json.dumps(tool_result)
                 })
 
-        # Safeguard: If save_order was executed (latest_order_record exists) but notify_admins_and_kitchen
-        # was not executed by the LLM (which happens frequently on Takeaway orders), auto-notify now:
-        if latest_order_record and not any(t.get("name") == "notify_admins_and_kitchen" for t in executed_tools):
+        # Safeguard: If save_order was executed but notify_admins_and_kitchen was omitted (e.g. Takeaway), auto-notify
+        if allow_ordering and latest_order_record and not any(t.get("name") == "notify_admins_and_kitchen" for t in executed_tools):
             logger.info("Auto-executing notify_admins_and_kitchen for saved order %s", latest_order_record.get("order_id"))
             saved_p = latest_order_record.get("order_payload", {})
             notify_res, _ = await execute_tool_call(
@@ -520,11 +509,200 @@ async def run_agent_loop(
         logger.exception("Error in agent runner execution for %s: %s", phone, e)
         final_reply = "Ji, aapka message mil gaya hai! Abhi thori mushkil aa rahi hai — please 1-2 minute baad dobara try karein ya call karein: " + settings.RESTAURANT_PHONE + " 😊"
 
-    # Final safeguard: NEVER return empty string to customer
     if not final_reply.strip():
         final_reply = "Ji zaroor! Aap kya order karna chahengey? Main aapki madad ke liye haazir hoon 😊"
 
     return final_reply, executed_tools
+
+
+async def run_open_agent(
+    phone: str,
+    user_text: str,
+    session: dict,
+    hours: dict,
+    dispatch_mode: str = "whatsapp",
+    waha_session: Optional[str] = None,
+    sender_jid: Optional[str] = None
+) -> tuple[str, list[dict]]:
+    """
+    1. OPEN AGENT (Full Menu Open — Lunch & Dinner)
+    - Hours: 11:00 AM – 3:30 PM & 6:30 PM – 11:30 PM PKT
+    - Order Taking: FULLY ACTIVE
+    - Menu: COMPLETE MENU AVAILABLE (Fried Rice, Chinese, Karahi, Handi, BBQ, Sobat, Fast Food, Drinks)
+    """
+    context_status = "[STATUS: RESTAURANT OPEN — FULL MENU ACTIVE. Fried Rice, Chinese, Karahi, Handi, BBQ, Sobat, Fast Food are ALL available and ready for immediate order]"
+    return await _execute_agent_turn(
+        phone=phone,
+        user_text=user_text,
+        session=session,
+        system_prompt=OPEN_AGENT_PROMPT,
+        tools=OPEN_AGENT_TOOLS,
+        context_status_note=context_status,
+        hours=hours,
+        dispatch_mode=dispatch_mode,
+        waha_session=waha_session,
+        sender_jid=sender_jid,
+        allow_ordering=True
+    )
+
+
+async def run_afternoon_agent(
+    phone: str,
+    user_text: str,
+    session: dict,
+    hours: dict,
+    dispatch_mode: str = "whatsapp",
+    waha_session: Optional[str] = None,
+    sender_jid: Optional[str] = None
+) -> tuple[str, list[dict]]:
+    """
+    2. AFTERNOON AGENT (Sobat Special Shift)
+    - Hours: 3:30 PM – 6:30 PM PKT
+    - Order Taking: ACTIVE FOR SOBAT, ROTI, NAAN & DRINKS ONLY
+    - Non-Sobat live cooking items (Fried Rice, Karahi, BBQ, Fast Food) are deferred to 6:30 PM
+    """
+    context_status = "[STATUS: AFTERNOON SOBAT BREAK (3:30 PM - 6:30 PM) — ONLY Sobat, Roti, Naan & Drinks are served right now. Defer live cooking items (Fried Rice, Karahi, BBQ) to 6:30 PM]"
+    return await _execute_agent_turn(
+        phone=phone,
+        user_text=user_text,
+        session=session,
+        system_prompt=AFTERNOON_AGENT_PROMPT,
+        tools=AFTERNOON_AGENT_TOOLS,
+        context_status_note=context_status,
+        hours=hours,
+        dispatch_mode=dispatch_mode,
+        waha_session=waha_session,
+        sender_jid=sender_jid,
+        allow_ordering=True
+    )
+
+
+async def run_closed_agent(
+    phone: str,
+    user_text: str,
+    session: dict,
+    hours: dict,
+    dispatch_mode: str = "whatsapp",
+    waha_session: Optional[str] = None,
+    sender_jid: Optional[str] = None
+) -> tuple[str, list[dict]]:
+    """
+    3. CLOSED AGENT (Night to Morning Shift)
+    - Hours: 11:30 PM – 11:00 AM PKT
+    - Order Taking: STRICTLY OFF (No advance orders, no live orders)
+    - Tools: Read-only menu queries, picture sending, and complaints
+    """
+    context_status = "[STATUS: RESTAURANT CLOSED (11:30 PM - 11:00 AM) — NO ORDERS ACCEPTED. Inform 11:00 AM opening time. Informational queries only]"
+    return await _execute_agent_turn(
+        phone=phone,
+        user_text=user_text,
+        session=session,
+        system_prompt=CLOSED_AGENT_PROMPT,
+        tools=CLOSED_AGENT_TOOLS,
+        context_status_note=context_status,
+        hours=hours,
+        dispatch_mode=dispatch_mode,
+        waha_session=waha_session,
+        sender_jid=sender_jid,
+        allow_ordering=False
+    )
+
+
+async def execute_designated_agent(
+    phone: str,
+    user_text: str,
+    session: dict,
+    hours: dict,
+    dispatch_mode: str = "whatsapp",
+    waha_session: Optional[str] = None,
+    sender_jid: Optional[str] = None,
+    override_shift: Optional[str] = None
+) -> tuple[str, list[dict], str]:
+    """
+    Evaluates current time/shift and delegates execution to the designated agent:
+    - 'open_agent': Full menu open (11:00 AM–3:30 PM & 6:30 PM–11:30 PM PKT)
+    - 'afternoon_agent': Sobat only break (3:30 PM–6:30 PM PKT)
+    - 'closed_agent': Closed shift (11:30 PM–11:00 AM PKT)
+
+    Returns: (final_reply, executed_tools, active_agent_name)
+    """
+    force_open = await redis_client.get("flag:force_open") == "1"
+
+    if force_open or override_shift in ("open", "full_menu"):
+        reply, tools = await run_open_agent(
+            phone, user_text, session, hours, dispatch_mode, waha_session, sender_jid
+        )
+        return reply, tools, "open_agent"
+
+    if override_shift in ("afternoon", "sobat_only"):
+        reply, tools = await run_afternoon_agent(
+            phone, user_text, session, hours, dispatch_mode, waha_session, sender_jid
+        )
+        return reply, tools, "afternoon_agent"
+
+    if override_shift in ("closed",):
+        reply, tools = await run_closed_agent(
+            phone, user_text, session, hours, dispatch_mode, waha_session, sender_jid
+        )
+        return reply, tools, "closed_agent"
+
+    # Live clock routing
+    if not hours.get("is_open", True):
+        reply, tools = await run_closed_agent(
+            phone, user_text, session, hours, dispatch_mode, waha_session, sender_jid
+        )
+        return reply, tools, "closed_agent"
+
+    if hours.get("is_break_time", False):
+        reply, tools = await run_afternoon_agent(
+            phone, user_text, session, hours, dispatch_mode, waha_session, sender_jid
+        )
+        return reply, tools, "afternoon_agent"
+
+    # Default open full menu
+    reply, tools = await run_open_agent(
+        phone, user_text, session, hours, dispatch_mode, waha_session, sender_jid
+    )
+    return reply, tools, "open_agent"
+
+
+async def run_agent_loop(
+    phone: str,
+    user_text: str,
+    session: dict,
+    system_prompt: str,
+    hours: dict,
+    dispatch_mode: str = "whatsapp",
+    waha_session: Optional[str] = None,
+    sender_jid: Optional[str] = None
+) -> tuple[str, list[dict]]:
+    """Legacy/Compatibility entry point: executes agent turn with the specified system prompt."""
+    if system_prompt == CLOSED_AGENT_PROMPT or system_prompt == CLOSED_SYSTEM_PROMPT:
+        tools = CLOSED_AGENT_TOOLS
+        note = "[STATUS: RESTAURANT CLOSED (11:30 PM - 11:00 AM) — NO ORDERS ACCEPTED]"
+        allow_ord = False
+    elif system_prompt == AFTERNOON_AGENT_PROMPT or system_prompt == SOBAT_ONLY_SYSTEM_PROMPT:
+        tools = AFTERNOON_AGENT_TOOLS
+        note = "[STATUS: AFTERNOON SOBAT BREAK (3:30 PM - 6:30 PM) — ONLY Sobat served]"
+        allow_ord = True
+    else:
+        tools = OPEN_AGENT_TOOLS
+        note = "[STATUS: RESTAURANT OPEN — FULL MENU ACTIVE]"
+        allow_ord = True
+
+    return await _execute_agent_turn(
+        phone=phone,
+        user_text=user_text,
+        session=session,
+        system_prompt=system_prompt,
+        tools=tools,
+        context_status_note=note,
+        hours=hours,
+        dispatch_mode=dispatch_mode,
+        waha_session=waha_session,
+        sender_jid=sender_jid,
+        allow_ordering=allow_ord
+    )
 
 
 async def process_message(payload: dict):
@@ -632,29 +810,18 @@ async def process_message(payload: dict):
             "confirm_key": None
         }
 
-    # 3. Determine operational shift
+    # 3. Execute designated agent based on operational shift (Open, Afternoon, Closed)
     hours = get_hours_info()
-    force_open = await redis_client.get("flag:force_open") == "1"
-    if force_open:
-        system_prompt = FULL_MENU_SYSTEM_PROMPT
-    elif not hours["is_open"]:
-        system_prompt = CLOSED_SYSTEM_PROMPT
-    elif hours["is_break_time"]:
-        system_prompt = SOBAT_ONLY_SYSTEM_PROMPT
-    else:
-        system_prompt = FULL_MENU_SYSTEM_PROMPT
-
-    # 4. Run shared agent loop
-    final_reply, _ = await run_agent_loop(
+    final_reply, _, active_agent = await execute_designated_agent(
         phone=phone,
         user_text=user_text,
         session=session,
-        system_prompt=system_prompt,
         hours=hours,
         dispatch_mode="whatsapp",
         waha_session=waha_session,
         sender_jid=sender_jid
     )
+    logger.info("Executed designated agent '%s' for customer %s", active_agent, phone)
 
     # 5. Send reply via WhatsApp with dynamic human-like delay (1 - 2 - 3 seconds)
     if final_reply:

@@ -10,11 +10,14 @@ from services.session import get_session, set_session, clear_session, generate_c
 from services.hours import get_hours_info
 from services.tools import check_returning_customer
 from services.prompts import (
+    OPEN_AGENT_PROMPT,
+    AFTERNOON_AGENT_PROMPT,
+    CLOSED_AGENT_PROMPT,
     FULL_MENU_SYSTEM_PROMPT,
     SOBAT_ONLY_SYSTEM_PROMPT,
     CLOSED_SYSTEM_PROMPT
 )
-from services.agent_runner import run_agent_loop
+from services.agent_runner import execute_designated_agent, run_agent_loop
 from routers.admin_commands import handle_admin_command
 
 logger = logging.getLogger("test_playground")
@@ -65,38 +68,19 @@ async def simulate_chat_turn(payload: dict):
             "tool_calls": [{"tool": "admin_command", "args": {"command": user_text}, "result": admin_reply}]
         }
 
-    # 2. Determine Shift (Default to full_menu for instant testing)
+    # 2. Determine Shift & Run Designated Agent
     hours = get_hours_info()
-    if override_shift == "closed":
-        system_prompt = CLOSED_SYSTEM_PROMPT
-        agent_type = "closed"
-    elif override_shift == "sobat_only":
-        system_prompt = SOBAT_ONLY_SYSTEM_PROMPT
-        agent_type = "sobat_only"
-    elif override_shift == "live_clock":
-        agent_type = hours.get("agent_type")
-        if not hours["is_open"]:
-            system_prompt = CLOSED_SYSTEM_PROMPT
-        elif hours["is_break_time"]:
-            system_prompt = SOBAT_ONLY_SYSTEM_PROMPT
-        else:
-            system_prompt = FULL_MENU_SYSTEM_PROMPT
-    else:
-        # Default in Web Simulator: Full Menu Open
-        system_prompt = FULL_MENU_SYSTEM_PROMPT
-        agent_type = "full_menu"
-
-    # 3. Run shared agent loop (simulator mode — mocks WhatsApp sends)
-    final_reply, executed_tools = await run_agent_loop(
+    sim_override = None if override_shift == "live_clock" else (override_shift or "full_menu")
+    final_reply, executed_tools, active_agent = await execute_designated_agent(
         phone=phone,
         user_text=user_text,
         session=session,
-        system_prompt=system_prompt,
         hours=hours,
-        dispatch_mode="simulator"
+        dispatch_mode="simulator",
+        override_shift=sim_override
     )
 
-    # 4. Update session history
+    # 3. Update session history
     history = session.get("history", [])
     history.append({"role": "user", "content": user_text})
     if final_reply:
@@ -106,7 +90,7 @@ async def simulate_chat_turn(payload: dict):
 
     return {
         "reply": final_reply,
-        "shift": agent_type,
+        "shift": active_agent,
         "time_pkt": hours.get("current_time_pkt"),
         "session": session,
         "tool_calls": executed_tools

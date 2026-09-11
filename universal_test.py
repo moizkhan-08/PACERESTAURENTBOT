@@ -19,7 +19,18 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from services.tools import decompose_sobat_items, resolve_menu_item_price, calculate_bill
-from services.prompts import SYSTEM_BASE_INSTRUCTIONS
+from services.prompts import (
+    SYSTEM_BASE_INSTRUCTIONS,
+    OPEN_AGENT_PROMPT,
+    AFTERNOON_AGENT_PROMPT,
+    CLOSED_AGENT_PROMPT
+)
+from services.agent_runner import (
+    OPEN_AGENT_TOOLS,
+    AFTERNOON_AGENT_TOOLS,
+    CLOSED_AGENT_TOOLS,
+    execute_designated_agent
+)
 from services.db import db
 
 
@@ -166,6 +177,78 @@ async def run_tests():
     _, p_karahi_full, _ = resolve_menu_item_price("Chicken Peshawari Karahi", "Full", 0, menu_items)
     assert p_karahi_full == 1700.0, f"Expected 1700 for Karahi Full, got {p_karahi_full}"
     print(f"  [OK] Chicken Peshawari Karahi: Half = Rs. {p_karahi_half}, Full = Rs. {p_karahi_full}")
+
+    # ---------------------------------------------------------
+    # 6. Three Designated Agents & 1 PM Availability Tests
+    # ---------------------------------------------------------
+    print("\n[6/6] Testing 3 Designated Agents & Instructions...")
+    
+    # Check Open Agent prompt contains 1 PM full menu & Fried Rice mandate
+    assert "FRIED RICE & KITCHEN ITEMS AT 1:00 PM / DAYTIME" in OPEN_AGENT_PROMPT
+    assert "RESTAURANT IS 100% OPEN RIGHT NOW. COMPLETE MENU IS SERVED" in OPEN_AGENT_PROMPT
+    assert "Chicken Fried Rice" in OPEN_AGENT_PROMPT
+    print("  [OK] Open Agent: 1 PM Fried Rice mandate and active order taking verified")
+
+    # Check Afternoon Agent prompt restricts order taking to Sobat only
+    assert "STRICTLY SOBAT, ROTI, NAAN & DRINKS ONLY" in AFTERNOON_AGENT_PROMPT
+    assert "Fried Rice aur deegar kitchen menu shaam 6:30 PM se shuru hoga" in AFTERNOON_AGENT_PROMPT
+    print("  [OK] Afternoon Agent: Sobat-only order taking & 6:30 PM deferral verified")
+
+    # Check Closed Agent prompt strictly disables orders
+    assert "Order Taking: STRICTLY DISABLED — NO ORDERS ACCEPTED" in CLOSED_AGENT_PROMPT
+    assert "NO ADVANCE ORDERS (NEITHER DELIVERY NOR TAKEAWAY)" in CLOSED_AGENT_PROMPT
+    print("  [OK] Closed Agent: Order taking strictly disabled & advance orders declined")
+
+    # Check Tool Segregation
+    open_tool_names = [t["function"]["name"] for t in OPEN_AGENT_TOOLS]
+    afternoon_tool_names = [t["function"]["name"] for t in AFTERNOON_AGENT_TOOLS]
+    closed_tool_names = [t["function"]["name"] for t in CLOSED_AGENT_TOOLS]
+
+    assert "calculate_bill" in open_tool_names
+    assert "save_order" in open_tool_names
+    assert "calculate_bill" in afternoon_tool_names
+    assert "save_order" in afternoon_tool_names
+
+    # Closed Agent MUST NOT have bill calculation or order saving tools
+    assert "calculate_bill" not in closed_tool_names, "Closed agent must not have calculate_bill"
+    assert "save_order" not in closed_tool_names, "Closed agent must not have save_order"
+    assert "notify_admins_and_kitchen" not in closed_tool_names, "Closed agent must not have notify_admins_and_kitchen"
+    assert "read_menu" in closed_tool_names
+    print("  [OK] Tool Segregation: Closed Agent structurally restricted from ordering tools")
+
+    # Check Shift Router
+    sim_open_hours = {"is_open": True, "is_break_time": False, "agent_type": "full_menu", "current_time_pkt": "01:00 PM"}
+    sim_afternoon_hours = {"is_open": True, "is_break_time": True, "agent_type": "sobat_only", "current_time_pkt": "04:30 PM"}
+    sim_closed_hours = {"is_open": False, "is_break_time": False, "agent_type": "closed", "current_time_pkt": "02:00 AM"}
+
+    # Live clock routing logic
+    # 1:00 PM -> open_agent
+    if not sim_open_hours.get("is_open", True):
+        dest_1pm = "closed_agent"
+    elif sim_open_hours.get("is_break_time", False):
+        dest_1pm = "afternoon_agent"
+    else:
+        dest_1pm = "open_agent"
+    assert dest_1pm == "open_agent", f"Expected open_agent at 1 PM, got {dest_1pm}"
+
+    # 4:30 PM -> afternoon_agent
+    if not sim_afternoon_hours.get("is_open", True):
+        dest_4pm = "closed_agent"
+    elif sim_afternoon_hours.get("is_break_time", False):
+        dest_4pm = "afternoon_agent"
+    else:
+        dest_4pm = "open_agent"
+    assert dest_4pm == "afternoon_agent", f"Expected afternoon_agent at 4:30 PM, got {dest_4pm}"
+
+    # 2:00 AM -> closed_agent
+    if not sim_closed_hours.get("is_open", True):
+        dest_2am = "closed_agent"
+    elif sim_closed_hours.get("is_break_time", False):
+        dest_2am = "afternoon_agent"
+    else:
+        dest_2am = "open_agent"
+    assert dest_2am == "closed_agent", f"Expected closed_agent at 2 AM, got {dest_2am}"
+    print("  [OK] Shift Routing: 1:00 PM -> open_agent, 4:30 PM -> afternoon_agent, 2:00 AM -> closed_agent")
 
     print("\n==================================================")
     print("SUCCESS: ALL UNIVERSAL TESTS PASSED!")

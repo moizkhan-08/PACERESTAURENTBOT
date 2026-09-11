@@ -89,12 +89,13 @@ PACEMAIN/
 
 The restaurant operates in **Asia/Karachi** timezone (`services/hours.py`):
 
-| Shift Name | Working Hours (PKT) | Menu & Bot Behavior |
-|---|---|---|
-| **Full Menu Shift** | `11:00 AM – 3:30 PM` & `6:30 PM – 11:30 PM` | Complete menu available: Sobat, Karahi, Handi, BBQ, Rice, Fast Food, Drinks, Roti. |
-| **Sobat Only Shift** | `3:30 PM – 6:30 PM` | Afternoon specialized shift. **Only Sobat / Paenda**, Naan, Roti, and Drinks are served. Other items politely deferred to 6:30 PM. |
-| **Closed Shift** | `11:30 PM – 11:00 AM` | Restaurant closed. Explains 11:00 AM opening, strictly **declines advance orders** (delivery & takeaway), answers menu/general queries. Live cooking dispatches are paused. |
+| Shift Name | Working Hours (PKT) | Designated Agent | Order Taking & Behavior |
+|---|---|---|---|
+| **Full Menu Shift** | `11:00 AM – 3:30 PM` & `6:30 PM – 11:30 PM` | `run_open_agent` (`OPEN_AGENT_PROMPT`) | **ACTIVE**: Full menu 100% available (Fried Rice, Chinese, Karahi, Handi, BBQ, Sobat, Fast Food). Never refuses full-menu items at 1:00 PM. |
+| **Sobat Only Shift** | `3:30 PM – 6:30 PM` | `run_afternoon_agent` (`AFTERNOON_AGENT_PROMPT`) | **ACTIVE (SOBAT & DRINKS ONLY)**: Afternoon specialized shift. Non-Sobat items politely deferred to 6:30 PM. |
+| **Closed Shift** | `11:30 PM – 11:00 AM` | `run_closed_agent` (`CLOSED_AGENT_PROMPT`) | **STRICTLY DISABLED**: Explains 11:00 AM opening, strictly declines advance orders. Tools structurally restricted to read-only (`read_menu`, `send_menu_images`, `report_complaint`). |
 
+*Router:* `execute_designated_agent(...)` evaluates the PKT shift and delegates execution to the designated agent.
 *Override Flag:* Setting Redis key `flag:force_open = "1"` forces the Full Menu shift 24/7 (used for testing).
 
 ---
