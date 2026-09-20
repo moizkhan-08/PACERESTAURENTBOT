@@ -131,7 +131,7 @@ def is_bbq_item(name: str) -> bool:
     return any(k in n for k in bbq_keywords)
 
 
-async def read_menu(category: Optional[str] = None, search: Optional[str] = None) -> list[dict]:
+async def read_menu(category: Optional[str] = None, search: Optional[str] = None, query: Optional[str] = None) -> list[dict]:
     """
     Fetches available menu items.
     Cached in Redis for 24h to reduce DB load and ensure sub-5ms responses.
@@ -155,9 +155,17 @@ async def read_menu(category: Optional[str] = None, search: Optional[str] = None
     if soldout:
         items = [it for it in items if not is_item_sold_out(it.get("name", ""), soldout)]
 
-    query = search or category
+    query = query or search or category
     if query:
         q = query.strip().lower()
+        # If the queried item is sold out, inform the agent explicitly
+        if soldout and is_item_sold_out(q, soldout):
+            return [{
+                "status": "sold_out",
+                "name": query.title(),
+                "message": f"'{query.title()}' is 100% SOLD OUT / KHATAM today. Explicitly inform the customer that this item is sold out and politely suggest other available dishes."
+            }]
+
         # Bread alias lookup for maana / roti queries
         q_words = set(re.findall(r'[a-zA-Z]+', q))
         if bool(q_words.intersection({"manny", "manna", "mana", "maana", "maane", "mane"})):
@@ -782,7 +790,16 @@ async def calculate_bill(
     if is_delivery:
         summary_lines.append("🛵 *Delivery charges will apply*")
     summary_lines.append(f"💰 *Total: Rs. {total_bill:,.0f}*")
+    if not meets_minimum:
+        summary_lines.append(f"⚠️ *Delivery Notice:* Delivery ke liye kam az kam order Rs. {settings.MINIMUM_DELIVERY_ORDER:,.0f} ka hona zaroori hai (Abhi Rs. {subtotal:,.0f} hai).")
     formatted_summary = "\n".join(summary_lines)
+
+    res_message = ""
+    if not meets_minimum:
+        res_message = (
+            f"Delivery ke liye kam az kam order Rs. {settings.MINIMUM_DELIVERY_ORDER:,.0f} ka hona zaroori hai "
+            f"(abhi subtotal Rs. {subtotal:,.0f} hai) 😊 Baraye meherbani koi drink, roti ya deegar item sath add farmayein."
+        )
 
     return {
         "items": parsed_items,
@@ -790,6 +807,7 @@ async def calculate_bill(
         "thal_deposit": thal_deposit,
         "total_bill": total_bill,
         "formatted_summary": formatted_summary,
+        "message": res_message,
         "order_type": order_type,
         "meets_minimum_delivery": meets_minimum,
         "minimum_required": settings.MINIMUM_DELIVERY_ORDER

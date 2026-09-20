@@ -18,6 +18,9 @@ PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
+if sys.stdout and hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+
 from services.tools import (
     decompose_sobat_items,
     resolve_menu_item_price,
@@ -449,7 +452,71 @@ async def run_tests():
     assert len(received_concurrent) == 2, f"Expected 2 sequential calls (first + drained pending), got {len(received_concurrent)}"
     assert received_concurrent[0]["payload"]["body"] == "First Msg"
     assert received_concurrent[1]["payload"]["body"] == "Second Msg during run"
-    print("  [OK] Concurrency State Machine: Held message during processing and drained sequentially without race conditions")
+    # ---------------------------------------------------------
+    # 10. Agent Conversational Quality & Tone Verification
+    # ---------------------------------------------------------
+    print("\n[10/10] Testing Agent Conversational Quality & Tone Standards...")
+
+    # 10a. Minimum Delivery Order Enforcement in calculate_bill
+    calc_min = await calculate_bill([{"name": "Simple Sobat", "quantity": 1}], order_type="Delivery")
+    assert calc_min["meets_minimum_delivery"] is False, "1 Simple Sobat (Rs. 220) should not meet Rs. 300 minimum delivery"
+    assert "kam az kam" in calc_min["message"].lower() or "minimum" in calc_min["message"].lower()
+    print("  [OK] Minimum Delivery Guard: Subtotal Rs. 220 correctly flagged as below Rs. 300 minimum")
+
+    # 10b. read_menu sold-out explicit status
+    await redis_client.sadd("soldout:items", "karahi")
+    try:
+        res_soldout = await read_menu(query="karahi")
+        assert len(res_soldout) == 1
+        assert res_soldout[0].get("status") == "sold_out"
+        assert "SOLD OUT" in res_soldout[0].get("message", "")
+        print("  [OK] read_menu: Explicitly returned sold_out status for queried sold-out dish")
+    finally:
+        await redis_client.srem("soldout:items", "karahi")
+
+    # 10c. 1:00 PM Daytime Fried Rice Inquiry (Open Agent)
+    s_daytime = {"phone": "923306874242", "history": []}
+    reply_1pm, _, _ = await execute_designated_agent(
+        phone="923306874242",
+        user_text="Fried rice mil jaye gi?",
+        session=s_daytime,
+        hours=sim_open_hours,
+        dispatch_mode="simulator",
+        override_shift="open"
+    )
+    lower_1pm = reply_1pm.lower()
+    assert any(w in lower_1pm for w in ["dastiyab", "mil jaye", "bilkul", "ji haan", "available"]), \
+        f"Fried rice should be confirmed available at 1 PM! Reply: {reply_1pm}"
+    print(f"  [OK] 1:00 PM Fried Rice Inquiry confirmed available: \"{reply_1pm[:80]}...\"")
+
+    # 10d. Daytime BBQ Restriction Inquiry (Open Agent at 1:00 PM)
+    s_bbq = {"phone": "923306874242", "history": []}
+    reply_bbq, _, _ = await execute_designated_agent(
+        phone="923306874242",
+        user_text="1 chicken tikka piece delivery kardo",
+        session=s_bbq,
+        hours=h_lunch,  # 1:00 PM lunch hours where is_bbq_available is False
+        dispatch_mode="simulator",
+        override_shift="open"
+    )
+    lower_bbq = reply_bbq.lower()
+    assert "6:30" in lower_bbq, f"Agent should mention 6:30 PM for BBQ items! Reply: {reply_bbq}"
+    print(f"  [OK] Daytime BBQ Inquiry politely deferred to 6:30 PM: \"{reply_bbq[:80]}...\"")
+
+    # 10e. Afternoon Shift Deferral (Afternoon Agent at 4:30 PM)
+    s_afternoon = {"phone": "923306874242", "history": []}
+    reply_aft, _, _ = await execute_designated_agent(
+        phone="923306874242",
+        user_text="1 chicken karahi delivery karni hai",
+        session=s_afternoon,
+        hours=sim_afternoon_hours,
+        dispatch_mode="simulator",
+        override_shift="afternoon"
+    )
+    lower_aft = reply_aft.lower()
+    assert any(w in lower_aft for w in ["sobat", "paenda"]) and ("6:30" in lower_aft or "afternoon" in lower_aft), \
+        f"Afternoon agent should offer Sobat and defer Karahi to 6:30 PM! Reply: {reply_aft}"
+    print(f"  [OK] Afternoon Karahi inquiry politely deferred with Sobat offer: \"{reply_aft[:80]}...\"")
 
     print("\n==================================================")
     print("SUCCESS: ALL UNIVERSAL TESTS PASSED!")

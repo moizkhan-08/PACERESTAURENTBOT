@@ -367,6 +367,8 @@ async def _execute_agent_turn(
         context_note += f" [Verified Bill: Rs. {session['total_bill']:,.0f}{sub_str}{thal_str} - DO NOT RECALCULATE OR MULTIPLY]"
     if session.get("order_type", "").strip().lower() == "delivery":
         context_note += " [Delivery Order: Include '🛵 Delivery charges will apply' in Order Summary. DO NOT state any exact delivery fee amount]"
+        if session.get("subtotal") and float(session["subtotal"]) < settings.MINIMUM_DELIVERY_ORDER:
+            context_note += f" [⚠️ MINIMUM DELIVERY NOT MET: Subtotal Rs. {session['subtotal']:,.0f} < Rs. {settings.MINIMUM_DELIVERY_ORDER:,.0f}. Inform customer that delivery requires minimum Rs. {settings.MINIMUM_DELIVERY_ORDER:,.0f} food order, and politely suggest adding an item.]"
 
     # ── Real-Time Sold-Out Items Injection ──
     soldout_items = await get_soldout_items()
@@ -436,6 +438,19 @@ async def _execute_agent_turn(
                     "5) Explicitly mention menu card sent 👆 for viewing."
                 )
             })
+        elif hours.get("is_break_time"):
+            messages.append({
+                "role": "system",
+                "content": (
+                    "MANDATORY GREETING INSTRUCTION (AFTERNOON SOBAT SHIFT 3:30 PM - 6:30 PM):\n"
+                    "1) Greet warmly (e.g. 'Assalam-o-Alaikum! 🌟').\n"
+                    "2) Welcome to Pace Restaurant (e.g. '*Pace Restaurant, Dera Ismail Khan* mein khush amdeed! 🍽️').\n"
+                    "3) Explicitly mention menu card sent 👆 ('Yeh raha humara menu card 👆').\n"
+                    "4) Inform that afternoon break mein humari mashhoor *Sobat / Paenda* aur drinks dastiyab hain (baqi kitchen menu shaam 6:30 PM se shuru hoga).\n"
+                    "5) Ask for choice: Delivery or Takeaway? ('Aap *Delivery* karwana chahte hain ya *Takeaway*?')\n"
+                    "   (⚠️ NOTE: Agar customer ne pehle hi Delivery ya Takeaway mention kar diya hai, ya koi dish bata di hai, toh usko acknowledge karein aur agla zaroori sawaal poochein — Delivery ya Takeaway ka redundant sawaal dobara MAT poochein!)"
+                )
+            })
         else:
             messages.append({
                 "role": "system",
@@ -444,7 +459,8 @@ async def _execute_agent_turn(
                     "1) Greet warmly (e.g. 'Assalam-o-Alaikum! 🌟').\n"
                     "2) Welcome to Pace Restaurant (e.g. '*Pace Restaurant, Dera Ismail Khan* mein khush amdeed! 🍽️').\n"
                     "3) Explicitly mention menu card sent 👆 ('Yeh raha humara menu card 👆').\n"
-                    "4) Ask for choice: Delivery or Takeaway? ('Aap *Delivery* karwana chahte hain ya *Takeaway*?')"
+                    "4) Ask for choice: Delivery or Takeaway? ('Aap *Delivery* karwana chahte hain ya *Takeaway*?')\n"
+                    "   (⚠️ NOTE: Agar customer ne pehle hi Delivery ya Takeaway mention kar diya hai, ya koi dish bata di hai, toh usko acknowledge karein aur agla zaroori sawaal poochein — Delivery ya Takeaway ka redundant sawaal dobara MAT poochein!)"
                 )
             })
 
