@@ -1,5 +1,7 @@
 import asyncio
+import time
 import logging
+from dataclasses import dataclass, field
 from typing import Callable, Any, Dict, List, Optional
 from services.audio import transcribe_audio_payload
 from services.whatsapp import whatsapp
@@ -23,18 +25,32 @@ def extract_text_from_data(data_payload: dict) -> str:
     ).strip()
 
 
+@dataclass
+class CustomerDebounceState:
+    buffer: List[dict] = field(default_factory=list)
+    pending_buffer: List[dict] = field(default_factory=list)
+    first_arrival: float = 0.0
+    timer_task: Optional[asyncio.Task] = None
+    is_processing: bool = False
+    waha_session: Optional[str] = None
+
+
 class MessageDebouncer:
     """
-    Sliding window message aggregator for incoming customer WhatsApp messages.
-    When a customer sends multiple messages in quick succession (e.g., within 2 seconds),
-    the debounce timer resets on each new message. Once 2 seconds of silence elapse,
-    all buffered messages are combined into a single unified payload and processed once.
+    Production-grade Message Debounce & Buffer System.
+    Features:
+    1. Sliding Window (DEBOUNCE_SECONDS = 2.0): Resets on each new message.
+    2. Max-Wait Ceiling (MAX_WAIT_SECONDS = 5.0): Force-flushes after 5s from first arrival to prevent timer starvation.
+    3. 3-State Concurrency Machine (IDLE, BUFFERING, PROCESSING): Messages arriving while an agent is running are safely held in pending_buffer and drained sequentially.
+    4. Media-Aware Aggregation: Transcribes voice notes using their specific media payload before merging.
+    5. Proactive Typing Presence: Emits startTyping signal to WAHA immediately upon arrival and during debounce.
+    6. Automatic Memory Eviction: Cleans up customer state when IDLE.
     """
-    def __init__(self, delay: float = 2.0, max_buffer: int = 10):
-        self.delay = delay
-        self.max_buffer = max_buffer
-        self._buffers: Dict[str, List[dict]] = {}
-        self._tasks: Dict[str, asyncio.Task] = {}
+    def __init__(self, debounce_seconds: float = 2.0, max_wait_seconds: float = 5.0):
+        self.debounce_seconds = debounce_seconds
+        self.max_wait_seconds = max_wait_seconds
+        self._states: Dict[str, CustomerDebounceState] = {}
+        self._lock = asyncio.Lock()
 
     async def add_message(
         self,
@@ -44,105 +60,160 @@ class MessageDebouncer:
         waha_session: Optional[str] = None
     ):
         """
-        Adds a message to the customer's buffer and resets the 2-second debounce timer.
-        key: unique customer identifier (e.g. sender_jid or phone)
-        payload: the full webhook payload dict
-        process_callback: async function to call with the combined payload (e.g. process_message)
+        Enqueues an incoming customer message into the debounce system.
         """
-        if key not in self._buffers:
-            self._buffers[key] = []
-        self._buffers[key].append(payload)
-
-        # Send immediate typing indicator so customer knows bot is actively listening
+        # Proactively send typing indicator to WhatsApp
         try:
             await whatsapp.start_typing(key, session=waha_session)
         except Exception:
             pass
 
-        # If buffer reaches max_buffer, trigger immediately without waiting
-        if len(self._buffers[key]) >= self.max_buffer:
-            logger.info("Buffer limit reached (%d) for %s, dispatching immediately", self.max_buffer, key)
-            if key in self._tasks and not self._tasks[key].done():
-                self._tasks[key].cancel()
-            self._tasks[key] = asyncio.create_task(
-                self._dispatch_now(key, process_callback)
+        async with self._lock:
+            if key not in self._states:
+                self._states[key] = CustomerDebounceState(waha_session=waha_session)
+            state = self._states[key]
+            state.waha_session = waha_session
+
+            # If the agent is currently processing a turn for this customer,
+            # hold this new message in the pending_buffer to prevent concurrent race conditions!
+            if state.is_processing:
+                state.pending_buffer.append(payload)
+                logger.info("Customer %s is currently PROCESSING. Message held in pending_buffer (size: %d)", key, len(state.pending_buffer))
+                return
+
+            # Customer is in BUFFERING state
+            now = time.monotonic()
+            if not state.buffer:
+                state.first_arrival = now
+            state.buffer.append(payload)
+
+            elapsed = now - state.first_arrival
+
+            # Check Max-Wait Ceiling (e.g. 5.0s)
+            if elapsed >= self.max_wait_seconds:
+                logger.info("⏱️ Max-wait ceiling reached (%.2fs >= %.2fs) for %s. Force-flushing %d messages.", elapsed, self.max_wait_seconds, key, len(state.buffer))
+                if state.timer_task and not state.timer_task.done():
+                    state.timer_task.cancel()
+                state.timer_task = None
+                asyncio.create_task(self._execute_cycle(key, process_callback))
+                return
+
+            # Calculate remaining time before max-wait ceiling is reached
+            remaining_to_ceiling = max(0.1, self.max_wait_seconds - elapsed)
+            effective_delay = min(self.debounce_seconds, remaining_to_ceiling)
+
+            # Cancel previous sliding timer task
+            if state.timer_task and not state.timer_task.done():
+                state.timer_task.cancel()
+                logger.info("⏳ Sliding debounce timer reset (%.2fs) for %s (buffer size: %d, elapsed: %.2fs)", effective_delay, key, len(state.buffer), elapsed)
+            else:
+                logger.info("⏳ Debounce timer started (%.2fs) for %s", effective_delay, key)
+
+            state.timer_task = asyncio.create_task(
+                self._timer_worker(key, effective_delay, process_callback)
             )
-            return
 
-        # Cancel previous timer task to slide the window forward (reset 2s timer)
-        if key in self._tasks and not self._tasks[key].done():
-            self._tasks[key].cancel()
-            logger.info("⏳ Debounce timer reset (2.0s) for %s. Current buffer size: %d", key, len(self._buffers[key]))
-        else:
-            logger.info("⏳ Debounce timer started (2.0s) for %s", key)
-
-        # Start a new 2.0-second sliding window timer
-        self._tasks[key] = asyncio.create_task(
-            self._timer_expired(key, process_callback)
-        )
-
-    async def _timer_expired(self, key: str, process_callback: Callable[[dict], Any]):
+    async def _timer_worker(self, key: str, delay: float, process_callback: Callable[[dict], Any]):
         try:
-            await asyncio.sleep(self.delay)
+            await asyncio.sleep(delay)
         except asyncio.CancelledError:
-            # Timer was reset by another incoming message within the delay window
             return
 
-        await self._dispatch_now(key, process_callback)
+        async with self._lock:
+            state = self._states.get(key)
+            if not state or state.is_processing:
+                return
+            state.timer_task = None
 
-    async def _dispatch_now(self, key: str, process_callback: Callable[[dict], Any]):
-        messages = self._buffers.pop(key, [])
-        self._tasks.pop(key, None)
+        # Execute cycle
+        await self._execute_cycle(key, process_callback)
+
+    async def _execute_cycle(self, key: str, process_callback: Callable[[dict], Any]):
+        async with self._lock:
+            state = self._states.get(key)
+            if not state:
+                return
+            messages = state.buffer
+            state.buffer = []
+            state.first_arrival = 0.0
+            state.is_processing = True
 
         if not messages:
+            async with self._lock:
+                state.is_processing = False
+                if not state.pending_buffer:
+                    self._states.pop(key, None)
             return
 
-        if len(messages) == 1:
-            # Single message sent — process directly
-            combined_payload = messages[0]
-        else:
-            logger.info("📦 Aggregating %d rapid messages from %s into a single prompt", len(messages), key)
-            # Use the latest message as the base payload (preserves latest msg_id, headers, timestamps)
-            combined_payload = messages[-1]
-            phone = key.split("@")[0]
-
-            extracted_texts = []
-            for msg in messages:
-                data = msg.get("payload", {})
-                has_media = data.get("hasMedia", False)
-                media_info = data.get("media", {}) if isinstance(data.get("media"), dict) else {}
-                mimetype = media_info.get("mimetype", "")
-
-                # Handle voice note within the rapid stream
-                if (has_media or media_info) and ("audio" in mimetype or "ogg" in mimetype or "mp3" in mimetype or data.get("type") == "ptt"):
-                    try:
-                        transcribed = await transcribe_audio_payload(media_info, phone)
-                        if transcribed:
-                            extracted_texts.append(transcribed)
-                    except Exception as e:
-                        logger.warning("Voice note transcription error during debounce: %s", e)
-                else:
-                    txt = extract_text_from_data(data)
-                    if txt:
-                        extracted_texts.append(txt)
-
-            combined_text = "\n".join(extracted_texts).strip()
-            if not combined_text:
-                combined_text = extract_text_from_data(combined_payload.get("payload", {}))
-
-            # Update the base payload with the aggregated text and mark media as processed
-            if "payload" in combined_payload:
-                combined_payload["payload"]["body"] = combined_text
-                combined_payload["payload"]["hasMedia"] = False
-                if "_data" in combined_payload["payload"] and isinstance(combined_payload["payload"]["_data"], dict):
-                    combined_payload["payload"]["_data"]["body"] = combined_text
-
-        # Dispatch the unified payload
         try:
+            # Combine messages
+            combined_payload = await self._combine_messages(key, messages)
+            # Dispatch agent processing
             await process_callback(combined_payload)
         except Exception as e:
-            logger.error("Error executing debounced message for %s: %s", key, e, exc_info=True)
+            logger.error("Error executing debounced cycle for %s: %s", key, e, exc_info=True)
+        finally:
+            # Post-execution queue drain check
+            async with self._lock:
+                state = self._states.get(key)
+                if state:
+                    if state.pending_buffer:
+                        # Move pending messages to active buffer and trigger subsequent cycle
+                        logger.info("📦 Draining %d pending messages for customer %s into next cycle", len(state.pending_buffer), key)
+                        state.buffer = state.pending_buffer
+                        state.pending_buffer = []
+                        state.first_arrival = time.monotonic()
+                        state.is_processing = False
+                        # Give a short debounce window (e.g. 1.0s) for the next batch
+                        state.timer_task = asyncio.create_task(
+                            self._timer_worker(key, min(self.debounce_seconds, 1.0), process_callback)
+                        )
+                    else:
+                        state.is_processing = False
+                        # Clean up idle state to prevent memory leaks
+                        self._states.pop(key, None)
+                        logger.debug("Customer %s state transitioned to IDLE and evicted from memory.", key)
+
+    async def _combine_messages(self, key: str, messages: List[dict]) -> dict:
+        if len(messages) == 1:
+            return messages[0]
+
+        logger.info("📦 Aggregating %d rapid messages from %s into a single prompt", len(messages), key)
+        combined_payload = messages[-1]
+        phone = key.split("@")[0]
+
+        extracted_texts = []
+        for msg in messages:
+            data = msg.get("payload", {})
+            has_media = data.get("hasMedia", False)
+            media_info = data.get("media", {}) if isinstance(data.get("media"), dict) else {}
+            mimetype = media_info.get("mimetype", "")
+
+            # If this individual message is an audio / voice note, transcribe it using its own media payload!
+            if (has_media or media_info) and ("audio" in mimetype or "ogg" in mimetype or "mp3" in mimetype or data.get("type") == "ptt"):
+                try:
+                    transcribed = await transcribe_audio_payload(media_info, phone)
+                    if transcribed:
+                        extracted_texts.append(transcribed)
+                except Exception as e:
+                    logger.warning("Voice note transcription error during debounce: %s", e)
+            else:
+                txt = extract_text_from_data(data)
+                if txt:
+                    extracted_texts.append(txt)
+
+        combined_text = "\n".join(extracted_texts).strip()
+        if not combined_text:
+            combined_text = extract_text_from_data(combined_payload.get("payload", {}))
+
+        if "payload" in combined_payload:
+            combined_payload["payload"]["body"] = combined_text
+            combined_payload["payload"]["hasMedia"] = False
+            if "_data" in combined_payload["payload"] and isinstance(combined_payload["payload"]["_data"], dict):
+                combined_payload["payload"]["_data"]["body"] = combined_text
+
+        return combined_payload
 
 
-# Global debouncer singleton with 2.0-second sliding window
-message_debouncer = MessageDebouncer(delay=2.0)
+# Global debouncer singleton (2.0s sliding silence window, 5.0s max-wait ceiling)
+message_debouncer = MessageDebouncer(debounce_seconds=2.0, max_wait_seconds=5.0)

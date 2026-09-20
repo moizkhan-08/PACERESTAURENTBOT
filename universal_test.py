@@ -393,10 +393,10 @@ async def run_tests():
         print("  [SKIP] Current PKT time is already evening/dinner (after 6:30 PM)")
 
     # ---------------------------------------------------------
-    # 9. 2-Second Sliding Window Message Debouncer
+    # 9. Message Debouncer (Sliding Window, Max-Wait & Concurrency)
     # ---------------------------------------------------------
-    print("\n[9/9] Testing 2-Second Sliding Window Message Debouncer...")
-    debouncer = MessageDebouncer(delay=0.3)  # Use 0.3s for rapid test execution
+    print("\n[9/9] Testing Message Debouncer (Sliding Window, Max-Wait & Concurrency)...")
+    debouncer = MessageDebouncer(debounce_seconds=0.3, max_wait_seconds=0.7)
     received_payloads = []
 
     async def mock_process(p):
@@ -427,6 +427,29 @@ async def run_tests():
     assert "aur 1 regular coke" in combined_body
     print(f"  [OK] Debouncer: Successfully aggregated 3 rapid messages into single payload:")
     print(f"       \"{combined_body.replace(chr(10), ' | ')}\"")
+
+    # Test Concurrent Processing (pending_buffer drain)
+    received_concurrent = []
+    async def slow_mock_process(p):
+        await asyncio.sleep(0.3)  # Simulate slow agent
+        received_concurrent.append(p)
+
+    c_debouncer = MessageDebouncer(debounce_seconds=0.2, max_wait_seconds=0.5)
+    c_key = "923111222333@s.whatsapp.net"
+    # Send first message to trigger processing
+    await c_debouncer.add_message(c_key, {"payload": {"from": c_key, "id": "C1", "body": "First Msg"}}, slow_mock_process)
+    await asyncio.sleep(0.25)  # Let timer expire -> now slow_mock_process is running (is_processing=True)
+
+    # Send second message WHILE agent is processing -> should go to pending_buffer
+    await c_debouncer.add_message(c_key, {"payload": {"from": c_key, "id": "C2", "body": "Second Msg during run"}}, slow_mock_process)
+
+    # Wait for slow_mock_process to finish (0.3s) + drain cycle (0.2s) + second run (0.3s) + buffer
+    await asyncio.sleep(0.9)
+
+    assert len(received_concurrent) == 2, f"Expected 2 sequential calls (first + drained pending), got {len(received_concurrent)}"
+    assert received_concurrent[0]["payload"]["body"] == "First Msg"
+    assert received_concurrent[1]["payload"]["body"] == "Second Msg during run"
+    print("  [OK] Concurrency State Machine: Held message during processing and drained sequentially without race conditions")
 
     print("\n==================================================")
     print("SUCCESS: ALL UNIVERSAL TESTS PASSED!")
