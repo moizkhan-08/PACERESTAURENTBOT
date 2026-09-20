@@ -5,6 +5,7 @@ from fastapi import APIRouter, BackgroundTasks, Request, HTTPException, status
 from config import settings
 from services.cache import redis_client
 from services.agent_runner import process_message
+from services.debounce import message_debouncer
 from services.access_control import is_number_allowed
 from routers.admin_commands import handle_admin_command
 
@@ -132,7 +133,13 @@ async def incoming_waha_webhook(req: Request, background_tasks: BackgroundTasks)
         logger.debug("Duplicate message ignored: %s", msg_id)
         return {"status": "duplicate_ignored"}
 
-    # 4. Asynchronous Task Dispatch
-    background_tasks.add_task(process_message, payload)
-    return {"status": "queued", "msg_id": msg_id}
+    # 4. Asynchronous Task Dispatch with 2-second Sliding Window Debounce
+    # If customer sends multiple rapid messages within 2 seconds, they are combined into a single unified prompt.
+    await message_debouncer.add_message(
+        key=sender,
+        payload=payload,
+        process_callback=process_message,
+        waha_session=waha_session
+    )
+    return {"status": "debouncing", "msg_id": msg_id}
 

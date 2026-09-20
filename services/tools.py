@@ -119,6 +119,18 @@ def is_item_sold_out(item_name: str, soldout_set: set) -> bool:
     return False
 
 
+def is_bbq_item(name: str) -> bool:
+    """
+    Checks if a dish is a BBQ item (Chicken Tikka, Seekh Kabab, Malai Boti, BBQ Chicken Sobat, etc.).
+    BBQ items require live charcoal sigri which is ONLY lit at 6:30 PM PKT.
+    """
+    if not name:
+        return False
+    n = name.lower()
+    bbq_keywords = ["bbq", "barbeque", "barbecue", "tikka", "malai boti", "seekh kabab", "seekh kebab"]
+    return any(k in n for k in bbq_keywords)
+
+
 async def read_menu(category: Optional[str] = None, search: Optional[str] = None) -> list[dict]:
     """
     Fetches available menu items.
@@ -658,6 +670,35 @@ async def calculate_bill(
     """
     menu_items = await read_menu()
     items = decompose_sobat_items(items)
+
+    # ── BBQ availability check (strictly after 6:30 PM PKT) ──
+    from services.hours import get_hours_info
+    force_open = await redis_client.get("flag:force_open") == "1"
+    hours_info = get_hours_info()
+    if not force_open and not hours_info.get("is_bbq_available", False):
+        bbq_found = []
+        for raw_item in items:
+            item_name = (raw_item.get("name") or "").strip()
+            if is_bbq_item(item_name):
+                bbq_found.append(raw_item.get("name", item_name))
+        if bbq_found:
+            return {
+                "error": True,
+                "bbq_restricted": True,
+                "message": (
+                    f"Maaf kijiye ga, BBQ items ({', '.join(bbq_found)}) shaam 6:30 PM se shuru hote hain 😊 "
+                    f"Is waqt hamare paas Chicken Sobat (Fry Pieces), Karahi, Handi, Chinese Rice waghera dastiyab hain. "
+                    f"Kya aap in mein se kuch try karna chahenge?"
+                ),
+                "items": [],
+                "subtotal": 0,
+                "thal_deposit": 0,
+                "total_bill": 0,
+                "formatted_summary": "",
+                "order_type": order_type,
+                "meets_minimum_delivery": False,
+                "minimum_required": settings.MINIMUM_DELIVERY_ORDER
+            }
 
     # ── Sold-out item validation ──
     soldout = await get_soldout_items()

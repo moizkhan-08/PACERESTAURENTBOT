@@ -23,6 +23,7 @@ from services.tools import (
     resolve_menu_item_price,
     calculate_bill,
     is_item_sold_out,
+    is_bbq_item,
     read_menu,
     get_soldout_items
 )
@@ -40,6 +41,8 @@ from services.agent_runner import (
 )
 from services.db import db
 from services.cache import redis_client
+from services.hours import get_hours_info
+from services.debounce import MessageDebouncer
 from routers.admin_commands import handle_admin_command
 
 
@@ -118,8 +121,10 @@ async def run_tests():
     assert p_simple == 220.0, f"Expected 220 for Simple Sobat, got {p_simple}"
     print(f"  [OK] Simple Sobat: Rs.{p_simple}")
 
-    # Bill for 1 BBQ piece sobat + 1 Fried piece sobat = 530 + 520 = 1050
+    # Bill for 1 BBQ piece sobat + 1 Fried piece sobat = 530 + 520 = 1050 (use force_open to bypass live clock)
+    await redis_client.set("flag:force_open", "1")
     calc_combo = await calculate_bill([{"name": "1 bbq piece sobat and one fried piece", "quantity": 1}], order_type="Takeaway")
+    await redis_client.delete("flag:force_open")
     assert calc_combo["total_bill"] == 1050.0, f"Expected 1050, got {calc_combo['total_bill']}"
     assert "Delivery charges will apply" not in calc_combo["formatted_summary"]
     print(f"  [OK] Combined Bill: 1x BBQ (Rs.530) + 1x Fried (Rs.520) = Rs.{calc_combo['total_bill']}")
@@ -194,7 +199,8 @@ async def run_tests():
     
     # Check Open Agent prompt contains 1 PM full menu & Fried Rice mandate
     assert "FRIED RICE & KITCHEN ITEMS AT 1:00 PM / DAYTIME" in OPEN_AGENT_PROMPT
-    assert "RESTAURANT IS 100% OPEN RIGHT NOW. COMPLETE MENU IS SERVED" in OPEN_AGENT_PROMPT
+    assert "RESTAURANT IS 100% OPEN RIGHT NOW" in OPEN_AGENT_PROMPT
+    assert "BBQ items SIRF SHAAM 6:30 PM KE BAAD DASTIYAB HAIN" in OPEN_AGENT_PROMPT
     assert "Chicken Fried Rice" in OPEN_AGENT_PROMPT
     print("  [OK] Open Agent: 1 PM Fried Rice mandate and active order taking verified")
 
@@ -336,6 +342,91 @@ async def run_tests():
         print("  [OK] Agent Turn: Customer asked 'do you have sobat?' and bot correctly responded it is SOLD OUT!")
     finally:
         await redis_client.srem("soldout:items", "sobat")
+
+    # ---------------------------------------------------------
+    # 8. BBQ Timing Restrictions (Strictly 6:30 PM PKT onwards)
+    # ---------------------------------------------------------
+    print("\n[8/9] Testing BBQ Timing Restrictions (6:30 PM PKT onwards)...")
+    from datetime import datetime, time
+    import pytz
+    PKT = pytz.timezone("Asia/Karachi")
+
+    # Shift checks
+    h_lunch = get_hours_info(datetime(2026, 9, 20, 13, 0, tzinfo=PKT))  # 1:00 PM
+    assert h_lunch["is_bbq_available"] is False, "BBQ should NOT be available at 1:00 PM"
+    assert h_lunch["agent_type"] == "full_menu"
+    print("  [OK] 1:00 PM PKT: Full menu open, but is_bbq_available is FALSE")
+
+    h_afternoon = get_hours_info(datetime(2026, 9, 20, 16, 30, tzinfo=PKT))  # 4:30 PM
+    assert h_afternoon["is_bbq_available"] is False, "BBQ should NOT be available at 4:30 PM"
+    print("  [OK] 4:30 PM PKT: Sobat-only shift, is_bbq_available is FALSE")
+
+    h_dinner = get_hours_info(datetime(2026, 9, 20, 19, 0, tzinfo=PKT))  # 7:00 PM
+    assert h_dinner["is_bbq_available"] is True, "BBQ SHOULD be available at 7:00 PM"
+    assert h_dinner["agent_type"] == "full_menu"
+    print("  [OK] 7:00 PM PKT: Full menu open, is_bbq_available is TRUE")
+
+    # is_bbq_item helper
+    assert is_bbq_item("Chicken Tikka Piece") is True
+    assert is_bbq_item("BBQ Chicken Sobat") is True
+    assert is_bbq_item("Chicken Malai Boti") is True
+    assert is_bbq_item("Seekh Kabab") is True
+    assert is_bbq_item("Chicken Fry Piece") is False
+    assert is_bbq_item("Chicken Sobat (Fry Pieces)") is False
+    assert is_bbq_item("Simple Sobat") is False
+    assert is_bbq_item("Chicken Peshawari Karahi") is False
+    assert is_bbq_item("Chicken Fried Rice") is False
+    print("  [OK] is_bbq_item: Correctly identifies BBQ items vs Fried/Sobat/Karahi items")
+
+    # calculate_bill deterministic rejection of BBQ before 6:30 PM
+    # Ensure force_open flag is not set
+    await redis_client.delete("flag:force_open")
+    # If current time is before 6:30 PM, calculate_bill should reject BBQ items
+    curr_h = get_hours_info()
+    if not curr_h.get("is_bbq_available"):
+        calc_bbq = await calculate_bill([{"name": "Chicken Tikka Piece", "quantity": 1}], order_type="Takeaway")
+        assert calc_bbq.get("error") is True, "calculate_bill should reject BBQ items before 6:30 PM"
+        assert calc_bbq.get("bbq_restricted") is True
+        assert "6:30 PM" in calc_bbq.get("message", "")
+        print("  [OK] calculate_bill: Deterministically blocked BBQ item before 6:30 PM")
+    else:
+        print("  [SKIP] Current PKT time is already evening/dinner (after 6:30 PM)")
+
+    # ---------------------------------------------------------
+    # 9. 2-Second Sliding Window Message Debouncer
+    # ---------------------------------------------------------
+    print("\n[9/9] Testing 2-Second Sliding Window Message Debouncer...")
+    debouncer = MessageDebouncer(delay=0.3)  # Use 0.3s for rapid test execution
+    received_payloads = []
+
+    async def mock_process(p):
+        received_payloads.append(p)
+
+    test_key = "923999888777@s.whatsapp.net"
+    p1 = {"payload": {"from": test_key, "id": "M1", "body": "Salam"}}
+    p2 = {"payload": {"from": test_key, "id": "M2", "body": "1 sobat chahiye"}}
+    p3 = {"payload": {"from": test_key, "id": "M3", "body": "aur 1 regular coke"}}
+
+    # Send p1 at t=0
+    await debouncer.add_message(test_key, p1, mock_process)
+    await asyncio.sleep(0.1)  # 0.1s later (within 0.3s window) -> should reset timer
+    await debouncer.add_message(test_key, p2, mock_process)
+    await asyncio.sleep(0.1)  # 0.1s later (within 0.3s window) -> should reset timer
+    await debouncer.add_message(test_key, p3, mock_process)
+
+    # At this point, mock_process should NOT have been called yet
+    assert len(received_payloads) == 0, f"Expected 0 calls before timer expiry, got {len(received_payloads)}"
+
+    # Wait for timer to expire (0.3s delay + 0.15s buffer)
+    await asyncio.sleep(0.45)
+
+    assert len(received_payloads) == 1, f"Expected exactly 1 combined call, got {len(received_payloads)}"
+    combined_body = received_payloads[0]["payload"]["body"]
+    assert "Salam" in combined_body
+    assert "1 sobat chahiye" in combined_body
+    assert "aur 1 regular coke" in combined_body
+    print(f"  [OK] Debouncer: Successfully aggregated 3 rapid messages into single payload:")
+    print(f"       \"{combined_body.replace(chr(10), ' | ')}\"")
 
     print("\n==================================================")
     print("SUCCESS: ALL UNIVERSAL TESTS PASSED!")

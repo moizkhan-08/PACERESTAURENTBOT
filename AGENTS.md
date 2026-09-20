@@ -73,6 +73,7 @@ PACEMAIN/
 │   ├── whatsapp.py           # WAHA HTTP client wrapper with retry & dead-letter logging
 │   ├── hours.py              # Pakistan Standard Time (PKT) shift & operational hours logic
 │   ├── session.py            # Redis session storage, 90-min TTL, and order confirmation keys
+│   ├── debounce.py           # 2-second sliding window message debounce & aggregation
 │   ├── db.py                 # Async Supabase DB client with error handling
 │   ├── cache.py              # Redis client wrapper with in-memory fallback for test runs
 │   ├── audio.py              # Whisper voice note downloader and transcriber
@@ -91,8 +92,9 @@ The restaurant operates in **Asia/Karachi** timezone (`services/hours.py`):
 
 | Shift Name | Working Hours (PKT) | Designated Agent | Order Taking & Behavior |
 |---|---|---|---|
-| **Full Menu Shift** | `11:00 AM – 3:30 PM` & `6:30 PM – 11:30 PM` | `run_open_agent` (`OPEN_AGENT_PROMPT`) | **ACTIVE**: Full menu 100% available (Fried Rice, Chinese, Karahi, Handi, BBQ, Sobat, Fast Food). Never refuses full-menu items at 1:00 PM. |
-| **Sobat Only Shift** | `3:30 PM – 6:30 PM` | `run_afternoon_agent` (`AFTERNOON_AGENT_PROMPT`) | **ACTIVE (SOBAT & DRINKS ONLY)**: Afternoon specialized shift. Non-Sobat items politely deferred to 6:30 PM. |
+| **Lunch Shift** | `11:00 AM – 3:30 PM` | `run_open_agent` (`OPEN_AGENT_PROMPT`) | **ACTIVE**: Sobat (Fry/Simple), Karahi, Handi, Chinese, Fried Rice, Fast Food, Breads, Drinks. ⚠️ **BBQ items strictly NOT available before 6:30 PM**. |
+| **Sobat Only Shift** | `3:30 PM – 6:30 PM` | `run_afternoon_agent` (`AFTERNOON_AGENT_PROMPT`) | **ACTIVE (SOBAT & DRINKS ONLY)**: Afternoon specialized shift. Non-Sobat items and BBQ politely deferred to 6:30 PM. |
+| **Dinner Shift** | `6:30 PM – 11:30 PM` | `run_open_agent` (`OPEN_AGENT_PROMPT`) | **ACTIVE (FULL MENU + BBQ)**: Entire restaurant menu 100% live including BBQ (Chicken Tikka, Malai Boti, Seekh Kabab, BBQ Chicken Sobat). |
 | **Closed Shift** | `11:30 PM – 11:00 AM` | `run_closed_agent` (`CLOSED_AGENT_PROMPT`) | **STRICTLY DISABLED**: Explains 11:00 AM opening, strictly declines advance orders. Tools structurally restricted to read-only (`read_menu`, `send_menu_images`, `report_complaint`). |
 
 *Router:* `execute_designated_agent(...)` evaluates the PKT shift and delegates execution to the designated agent.
@@ -197,6 +199,14 @@ All financial, state, and menu operations are strictly controlled in Python code
     * Clarify 1.5 Liter (Rs. 220), 1 Liter (Rs. 170), or Regular (Rs. 60). Mineral Water: Large (Rs. 100), Small (Rs. 60).
 16. **Delivery Charges Notice:**
     * For Delivery orders, the bot must explicitly mention in the Order Summary that delivery charges will apply (`🛵 *Delivery charges will apply*`), but strictly do NOT mention or calculate an exact amount for delivery charges.
+17. **BBQ Timing Mandate (6:30 PM PKT Onwards):**
+    * BBQ items (Chicken Tikka Piece, Malai Boti, Seekh Kabab, BBQ Chicken Sobat, BBQ Pieces) are **strictly NOT available before 6:30 PM PKT** because charcoal grills are only lit in the evening.
+    * If requested before 6:30 PM, the bot explains BBQ starts at 6:30 PM and suggests daytime items (Chicken Sobat Fry Pieces, Karahi, Handi, Chinese Rice).
+    * `calculate_bill()` deterministically blocks BBQ items if called before 6:30 PM.
+18. **2-Second Sliding Window Message Debouncer:**
+    * When customers send rapid fragmented WhatsApp messages (e.g. within 2 seconds of each other), the timer slides forward on each new message.
+    * Once 2 seconds of silence elapse, all buffered messages are aggregated into a single unified prompt and processed once.
+    * Eliminates parallel execution race conditions, session clobbering, and disjointed multiple replies.
 
 ---
 

@@ -382,6 +382,18 @@ async def _execute_agent_turn(
             f"NEVER say sold out items are available!]"
         )
 
+    # ── BBQ Timing Notice ──
+    force_open = await redis_client.get("flag:force_open") == "1"
+    if not force_open and not hours.get("is_bbq_available", False):
+        context_note += (
+            " [⚠️ BBQ TIMING MANDATE: BBQ items (Chicken Tikka, Seekh Kabab, Malai Boti, BBQ Chicken Sobat, BBQ Pieces) "
+            "are STRICTLY NOT AVAILABLE before 6:30 PM PKT. If customer asks for BBQ or tries to order BBQ items, "
+            "you MUST politely inform them that BBQ starts at 6:30 PM: "
+            "'Maaf kijiye ga, BBQ items shaam 6:30 PM se shuru hote hain 😊' "
+            "and suggest available daytime items: Chicken Sobat (Fry Pieces), Simple Sobat, Karahi, Handi, or Chinese Rice. "
+            "DO NOT confirm BBQ items before 6:30 PM!]"
+        )
+
     messages.append({"role": "system", "content": context_note})
 
     # Add past turn history (last 12 turns for better order flow context)
@@ -526,7 +538,15 @@ async def _execute_agent_turn(
         final_reply = "Ji, aapka message mil gaya hai! Abhi thori mushkil aa rahi hai — please 1-2 minute baad dobara try karein ya call karein: " + settings.RESTAURANT_PHONE + " 😊"
 
     if not final_reply.strip():
-        final_reply = "Ji zaroor! Aap kya order karna chahengey? Main aapki madad ke liye haazir hoon 😊"
+        calc_tool = next((t for t in executed_tools if t.get("name") == "calculate_bill"), None)
+        if calc_tool:
+            res = calc_tool.get("result", {})
+            if res.get("message"):
+                final_reply = res["message"]
+            elif res.get("formatted_summary"):
+                final_reply = res["formatted_summary"]
+        if not final_reply.strip():
+            final_reply = "Ji zaroor! Aap kya order karna chahengey? Main aapki madad ke liye haazir hoon 😊"
 
     return final_reply, executed_tools
 
@@ -546,7 +566,11 @@ async def run_open_agent(
     - Order Taking: FULLY ACTIVE
     - Menu: COMPLETE MENU AVAILABLE (Fried Rice, Chinese, Karahi, Handi, BBQ, Sobat, Fast Food, Drinks)
     """
-    context_status = "[STATUS: RESTAURANT OPEN — FULL MENU ACTIVE. Fried Rice, Chinese, Karahi, Handi, BBQ, Sobat, Fast Food are ALL available and ready for immediate order]"
+    is_bbq = hours.get("is_bbq_available", False)
+    if is_bbq:
+        context_status = "[STATUS: RESTAURANT OPEN — DINNER SHIFT. Full menu INCLUDING BBQ (Tikka, Kabab, BBQ Sobat), Karahi, Handi, Chinese, Sobat is 100% active]"
+    else:
+        context_status = "[STATUS: RESTAURANT OPEN — LUNCH SHIFT. Sobat (Fry/Simple), Karahi, Handi, Chinese, Fried Rice, Fast Food are ALL active. ⚠️ BBQ items (Tikka, Kabab, BBQ Sobat) are NOT available before 6:30 PM]"
     return await _execute_agent_turn(
         phone=phone,
         user_text=user_text,
