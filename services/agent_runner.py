@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 from typing import Optional, Any
 from openai import AsyncOpenAI
 from config import settings
@@ -99,6 +100,18 @@ AGENT_TOOLS = [
                     "thal_count": {
                         "type": "integer",
                         "description": "Number of traditional Sobat Thals requested. STRICTLY ONLY for Sobat / Paenda orders. All other dishes (Karahi, Handi, BBQ, Rice, Chinese, Fast Food, etc.) are strictly served in disposable packaging, so thal_count MUST be 0."
+                    },
+                    "customer_name": {
+                        "type": "string",
+                        "description": "Customer's name if provided by customer in chat"
+                    },
+                    "delivery_address": {
+                        "type": "string",
+                        "description": "Customer's delivery address if provided by customer in chat"
+                    },
+                    "pickup_time": {
+                        "type": "string",
+                        "description": "Customer's expected pickup time if order is Takeaway"
                     }
                 },
                 "required": ["items"]
@@ -197,7 +210,8 @@ async def execute_tool_call(
     dispatch_mode: str = "whatsapp",
     latest_order_record: Optional[dict] = None,
     waha_session: Optional[str] = None,
-    sender_jid: Optional[str] = None
+    sender_jid: Optional[str] = None,
+    user_text: str = ""
 ) -> tuple[dict, Optional[dict]]:
     """
     Executes a single tool call and returns (tool_result, updated_latest_order_record).
@@ -225,20 +239,60 @@ async def execute_tool_call(
             }
 
     elif tool_name == "calculate_bill":
-        items = tool_args.get("items", [])
-        order_type = tool_args.get("order_type", "Delivery")
-        thal_count = tool_args.get("thal_count", 0)
+        raw_items = tool_args.get("items", [])
+        order_type = tool_args.get("order_type") or session.get("order_type", "Delivery")
+        thal_count = tool_args.get("thal_count")
+
+        # Capture customer details from calculate_bill arguments if provided
+        if tool_args.get("customer_name") and not session.get("name"):
+            session["name"] = sanitize_free_text(tool_args["customer_name"])
+        if tool_args.get("delivery_address") and not session.get("address"):
+            session["address"] = sanitize_free_text(tool_args["delivery_address"])
+        if tool_args.get("pickup_time") and not session.get("pickup_time"):
+            session["pickup_time"] = sanitize_free_text(tool_args["pickup_time"])
+
+        # Smart Cart Staging & Addition Safeguard:
+        # If session already has items staged, and user is adding something new without removing:
+        user_msg = (user_text or "").lower()
+        has_add_intent = any(w in user_msg for w in ["add", "aur", "bhi", "sath", "plus", "saath", "sath mein"])
+        has_remove_intent = any(w in user_msg for w in ["nikal", "hata", "cancel", "remove", "badal", "change", "sirf", "instead"])
+        
+        staged_items = session.get("items", [])
+        if staged_items and has_add_intent and not has_remove_intent:
+            staged_names = [it.get("name", "").strip().lower() for it in staged_items]
+            passed_names = [it.get("name", "").strip().lower() for it in raw_items]
+            overlap = any(any(s in p or p in s for p in passed_names) for s in staged_names)
+            if not overlap and raw_items:
+                logger.info("Auto-merging %d previously staged items with %d new items", len(staged_items), len(raw_items))
+                items = list(staged_items) + list(raw_items)
+            else:
+                items = raw_items
+        else:
+            items = raw_items
+
+        # Thal deposit preservation safeguard:
+        # If customer chose Thal earlier for Sobat, and is now modifying/adding drinks/sides,
+        # don't accidentally drop the Thal deposit unless they explicitly said 'disposable':
+        if thal_count is None or (thal_count == 0 and not any(w in user_msg for w in ["disposable", "disp"])):
+            if session.get("thal_deposit", 0) > 0:
+                has_sobat = any("sobat" in it.get("name", "").lower() or "paenda" in it.get("name", "").lower() for it in items)
+                if has_sobat:
+                    thal_count = max(1, int(round(session.get("thal_deposit", 0) / 300.0)))
+        if thal_count is None:
+            thal_count = 0
+
         calc = await calculate_bill(items, order_type, thal_count)
         tool_result = calc
         
-        # Update session staging
-        session["items"] = calc["items"]
-        session["subtotal"] = calc["subtotal"]
-        session["thal_deposit"] = calc["thal_deposit"]
-        session["total_bill"] = calc["total_bill"]
-        session["order_type"] = order_type
-        if not session.get("confirm_key"):
-            session["confirm_key"] = generate_confirm_key(phone)
+        # Update session staging ONLY if calculation was successful (do not wipe valid cart on error)
+        if not calc.get("error"):
+            session["items"] = calc["items"]
+            session["subtotal"] = calc["subtotal"]
+            session["thal_deposit"] = calc["thal_deposit"]
+            session["total_bill"] = calc["total_bill"]
+            session["order_type"] = order_type
+            if not session.get("confirm_key"):
+                session["confirm_key"] = generate_confirm_key(phone)
 
     elif tool_name == "save_order":
         # Deterministic precedence: session items & total_bill have verified math from calculate_bill
@@ -258,6 +312,14 @@ async def execute_tool_call(
         saved = await save_order_record(session, items, total_bill, notes)
         tool_result = saved
         new_order_record = saved
+
+        # Clear cart staging from session so subsequent orders start with a clean slate
+        # (retains customer name and address for returning customer recognition)
+        session.pop("items", None)
+        session.pop("subtotal", None)
+        session.pop("thal_deposit", None)
+        session.pop("total_bill", None)
+        session.pop("confirm_key", None)
 
     elif tool_name == "report_complaint":
         complaint_text = tool_args.get("complaint_text", "No details")
@@ -331,6 +393,77 @@ async def execute_tool_call(
     return tool_result, new_order_record
 
 
+def extract_customer_info(text: str) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    """
+    Extracts (name, address, pickup_time) from user input text.
+    Handles Urdu / Roman Urdu / English patterns:
+    - 'Ahmad, Model Town DI Khan'
+    - 'Mera naam Usman hai, address Cantt'
+    - 'Tariq, 0333... Circular Road'
+    - 'Takeaway 20 min mein, naam Ali'
+    """
+    if not text:
+        return None, None, None
+
+    name = None
+    address = None
+    pickup_time = None
+    clean = text.strip()
+
+    # 1. Explicit name patterns
+    m_name = re.search(r'(?:mera\s+naam|naam|name\s*(?:is|:)?)\s+([A-Za-z\u0600-\u06FF]+(?:\s+[A-Za-z\u0600-\u06FF]+)?)', clean, re.I)
+    if m_name:
+        cand = m_name.group(1).strip()
+        cand = re.sub(r'\s+(?:hai|h|is|tha|hun|hoon)\b', '', cand, flags=re.I).strip()
+        stop_words = {"delivery", "takeaway", "order", "sobat", "karahi", "handi", "rice", "hai", "karo", "kardo", "please", "bhai", "ji", "aur"}
+        if cand.lower() not in stop_words and len(cand) >= 2:
+            name = cand.title()
+
+    # 2. Explicit address patterns
+    m_addr = re.search(r'(?:address|pata|delivery\s+address|location)\s*(?:is|:)?\s*([A-Za-z0-9\s,\.-]+)', clean, re.I)
+    if m_addr:
+        address = m_addr.group(1).strip()
+
+    # 3. Explicit pickup time
+    m_time = re.search(r'(\d+\s*(?:minute|min|m|ghanta|ghante|hours?)\s*(?:mein|tak|baad)?|(?:shaam|raat|dopahar)?\s*\d+(?::\d+)?\s*(?:am|pm|baje)?)', clean, re.I)
+    if m_time and any(w in clean.lower() for w in ["uthana", "uthaunga", "uthalunga", "pickup", "pick up", "aunga", "counter", "pohanch"]):
+        pickup_time = m_time.group(1).strip()
+
+    # 4. Comma / Dash / Newline separated: "Name, Address"
+    # Example: "Ahmad, Model Town DI Khan"
+    locality_keywords = {
+        "town", "chowk", "road", "gali", "mohalla", "colony", "bazaar", "mor", "di khan", "cantt",
+        "house", "makan", "near", "qasba", "village", "city", "bazar", "plaza", "flat", "street", "st",
+        "dera", "ismail", "khan", "shorkot", "multan road", "bannu road", "tank road", "topanwala"
+    }
+
+    if not name or not address:
+        for delim in [",", "\n", " - ", " / "]:
+            if delim in clean:
+                parts = [p.strip() for p in clean.split(delim) if p.strip()]
+                if len(parts) >= 2:
+                    p0 = parts[0]
+                    p1 = " ".join(parts[1:])
+                    p0_words = p0.split()
+                    p0_lower = p0.lower()
+                    non_name_words = {"salam", "aoa", "delivery", "takeaway", "order", "sobat", "karahi", "coke", "wait", "haan", "theek", "yes"}
+                    if not name and 1 <= len(p0_words) <= 3 and not re.search(r'\d', p0) and not any(w in p0_lower for w in non_name_words):
+                        if any(k in p1.lower() for k in locality_keywords) or len(p1) >= 6:
+                            name = p0.title()
+                            if not address:
+                                address = p1
+                            break
+
+    # 5. Locality check for stand-alone address if name is already known
+    if not address:
+        if any(k in clean.lower() for k in locality_keywords) and len(clean) >= 6:
+            order_words = {"sobat", "karahi", "handi", "coke", "roti", "delivery", "takeaway", "menu", "fried rice"}
+            if not any(w in clean.lower() for w in order_words):
+                address = clean
+
+    return name, address, pickup_time
+
+
 async def _execute_agent_turn(
     phone: str,
     user_text: str,
@@ -349,6 +482,26 @@ async def _execute_agent_turn(
     Called by run_open_agent, run_afternoon_agent, and run_closed_agent with their dedicated
     system prompts, tool schemas, and operational instructions.
     """
+    user_lower = user_text.lower()
+
+    # ── 1. Early Auto-detect order type from user text if not already set ──
+    if not session.get("order_type") and allow_ordering:
+        delivery_keywords = {"delivery", "deliver", "ghar", "ghar par", "ghar pe"}
+        takeaway_keywords = {"takeaway", "take away", "pickup", "pick up", "uthana", "uthaunga", "uthalunga", "counter"}
+        if any(kw in user_lower for kw in delivery_keywords):
+            session["order_type"] = "Delivery"
+        elif any(kw in user_lower for kw in takeaway_keywords):
+            session["order_type"] = "Takeaway"
+
+    # ── 2. Early Auto-detect customer info (Name, Address, Pickup Time) ──
+    ext_name, ext_addr, ext_time = extract_customer_info(user_text)
+    if ext_name and not session.get("name"):
+        session["name"] = ext_name
+    if ext_addr and not session.get("address"):
+        session["address"] = ext_addr
+    if ext_time and not session.get("pickup_time"):
+        session["pickup_time"] = ext_time
+
     # Build conversation messages
     history = session.get("history", [])
     messages = [{"role": "system", "content": system_prompt}]
@@ -360,18 +513,55 @@ async def _execute_agent_turn(
     if session.get("address"):
         context_note += f" [Customer Address: {session['address']}]"
     if session.get("order_type"):
-        context_note += f" [Order Stage: {session['order_type']} in progress]"
+        context_note += f" [Order Type Selected: {session['order_type']}]"
     if session.get("items"):
-        item_parts = [f"{it.get('quantity', 1)}x {it.get('name')}" for it in session['items']]
-        context_note += f" [Currently Staged Cart: {', '.join(item_parts)}]"
+        cart_lines = []
+        for it in session['items']:
+            var_label = f" ({it.get('variant')})" if it.get('variant') else ""
+            cart_lines.append(f"{it.get('quantity', 1)}x {it.get('name')}{var_label} @ Rs. {it.get('unit_price', it.get('price', 0)):,.0f}")
+        context_note += f" [Currently Staged Cart: {'; '.join(cart_lines)}]"
     if session.get("total_bill"):
         sub_str = f", Subtotal: Rs. {session['subtotal']:,.0f}" if session.get("subtotal") else ""
         thal_str = f", Thal Deposit: Rs. {session['thal_deposit']:,.0f}" if session.get("thal_deposit") else ""
-        context_note += f" [Verified Bill: Rs. {session['total_bill']:,.0f}{sub_str}{thal_str} - DO NOT RECALCULATE OR MULTIPLY]"
+        context_note += f" [Verified Bill: Rs. {session['total_bill']:,.0f}{sub_str}{thal_str} — EXACT AMOUNT, DO NOT RECALCULATE OR MULTIPLY]"
     if session.get("order_type", "").strip().lower() == "delivery":
         context_note += " [Delivery Order: Include '🛵 Delivery charges will apply' in Order Summary. DO NOT state any exact delivery fee amount]"
         if session.get("subtotal") and float(session["subtotal"]) < settings.MINIMUM_DELIVERY_ORDER:
-            context_note += f" [⚠️ MINIMUM DELIVERY NOT MET: Subtotal Rs. {session['subtotal']:,.0f} < Rs. {settings.MINIMUM_DELIVERY_ORDER:,.0f}. Inform customer that delivery requires minimum Rs. {settings.MINIMUM_DELIVERY_ORDER:,.0f} food order, and politely suggest adding an item.]"
+            context_note += f" [⚠️ MINIMUM DELIVERY NOT MET: Subtotal Rs. {session['subtotal']:,.0f} < Rs. {settings.MINIMUM_DELIVERY_ORDER:,.0f}. Inform customer and suggest adding items.]"
+
+    # ── Intelligent Step Progress Tracking ──
+    has_order_type = bool(session.get("order_type"))
+    has_items = bool(session.get("items"))
+    has_bill = bool(session.get("total_bill"))
+    has_name = bool(session.get("name"))
+    has_address = bool(session.get("address")) or bool(session.get("pickup_time"))
+    is_delivery = session.get("order_type", "").strip().lower() == "delivery"
+    is_takeaway = session.get("order_type", "").strip().lower() == "takeaway"
+    has_sobat_in_cart = has_items and any("sobat" in it.get("name", "").lower() or "paenda" in it.get("name", "").lower() for it in session.get("items", []))
+
+    if not has_order_type and not has_items:
+        step_note = "[CURRENT STEP: Step 1 — Ask Delivery ya Takeaway]"
+    elif has_order_type and not has_items:
+        step_note = "[CURRENT STEP: Step 2 — Take Items. Customer ne {0} select kiya hai, ab items lo]".format(session.get("order_type"))
+    elif has_items and not has_bill:
+        if has_sobat_in_cart:
+            step_note = "[CURRENT STEP: Step 3 — Ask Thal ya Disposable (SIRF Sobat ke liye), phir calculate_bill call karo]"
+        else:
+            step_note = "[CURRENT STEP: Step 4 — calculate_bill call karo (Step 3 skip — non-Sobat order)]"
+    elif has_bill and (not has_name or not has_address):
+        missing = []
+        if not has_name:
+            missing.append("naam")
+        if is_delivery and not session.get("address"):
+            missing.append("delivery address")
+        if is_takeaway and not session.get("pickup_time"):
+            missing.append("pickup time")
+        step_note = f"[CURRENT STEP: Step 5 — Customer Info chahiye: {', '.join(missing)}]"
+    elif has_bill and has_name and has_address:
+        step_note = "[CURRENT STEP: Step 6 — Official Order Summary receipt box dikhao aur confirmation maango (Haan/Cancel)]"
+    else:
+        step_note = "[CURRENT STEP: Awaiting customer input]"
+    context_note += f" {step_note}"
 
     # ── Real-Time Sold-Out Items Injection ──
     soldout_items = await get_soldout_items()
@@ -401,8 +591,8 @@ async def _execute_agent_turn(
 
     messages.append({"role": "system", "content": context_note})
 
-    # Add past turn history (last 12 turns for better order flow context)
-    for h in history[-12:]:
+    # Add past turn history (last 20 turns for robust order flow context)
+    for h in history[-20:]:
         messages.append(h)
 
     # Add current user message
@@ -478,7 +668,7 @@ async def _execute_agent_turn(
                 messages=messages,
                 tools=tools if tools else None,
                 tool_choice=tool_choice if tools else "none",
-                temperature=0.4,
+                temperature=0.25,
                 max_tokens=500
             )
 
@@ -508,7 +698,8 @@ async def _execute_agent_turn(
                     dispatch_mode=dispatch_mode,
                     latest_order_record=latest_order_record,
                     waha_session=waha_session,
-                    sender_jid=sender_jid
+                    sender_jid=sender_jid,
+                    user_text=user_text
                 )
 
                 executed_tools.append({
@@ -517,11 +708,20 @@ async def _execute_agent_turn(
                     "result": tool_result
                 })
 
+                # Inject formatted_summary directive for calculate_bill results
+                tool_content = json.dumps(tool_result)
+                if tool_name == "calculate_bill" and tool_result.get("formatted_summary"):
+                    tool_content += (
+                        "\n\n[MANDATORY INSTRUCTION: Use the 'formatted_summary' field EXACTLY as-is for item breakdown and total. "
+                        "DO NOT rewrite prices, DO NOT recalculate totals, DO NOT multiply quantities by price again. "
+                        "Echo the formatted_summary verbatim when showing the bill to the customer.]"
+                    )
+
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tool_call.id,
                     "name": tool_name,
-                    "content": json.dumps(tool_result)
+                    "content": tool_content
                 })
 
         # Safeguard: If save_order was executed but notify_admins_and_kitchen was omitted (e.g. Takeaway), auto-notify

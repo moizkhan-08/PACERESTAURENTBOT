@@ -58,7 +58,7 @@ async def simulate_chat_turn(payload: dict):
         history = session.get("history", [])
         history.append({"role": "user", "content": user_text})
         history.append({"role": "assistant", "content": admin_reply})
-        session["history"] = history[-10:]
+        session["history"] = history[-24:]
         await set_session(phone, session)
         return {
             "reply": admin_reply,
@@ -85,7 +85,7 @@ async def simulate_chat_turn(payload: dict):
     history.append({"role": "user", "content": user_text})
     if final_reply:
         history.append({"role": "assistant", "content": final_reply})
-    session["history"] = history[-10:]
+    session["history"] = history[-24:]
     await set_session(phone, session)
 
     return {

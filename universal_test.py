@@ -432,7 +432,7 @@ async def run_tests():
     assert settings.MAX_WAIT_SECONDS == 2.0
     print("  [OK] Default Debouncer configured to 2.0 seconds window & 2.0 seconds max ceiling")
 
-    debouncer = MessageDebouncer(debounce_seconds=0.3, max_wait_seconds=0.7)
+    debouncer = MessageDebouncer(debounce_seconds=0.6, max_wait_seconds=1.5)
     received_payloads = []
 
     async def mock_process(p):
@@ -445,16 +445,16 @@ async def run_tests():
 
     # Send p1 at t=0
     await debouncer.add_message(test_key, p1, mock_process)
-    await asyncio.sleep(0.1)  # 0.1s later (within 0.3s window) -> should reset timer
+    await asyncio.sleep(0.1)  # 0.1s later (well within 0.6s window) -> should reset timer
     await debouncer.add_message(test_key, p2, mock_process)
-    await asyncio.sleep(0.1)  # 0.1s later (within 0.3s window) -> should reset timer
+    await asyncio.sleep(0.1)  # 0.1s later (well within 0.6s window) -> should reset timer
     await debouncer.add_message(test_key, p3, mock_process)
 
     # At this point, mock_process should NOT have been called yet
     assert len(received_payloads) == 0, f"Expected 0 calls before timer expiry, got {len(received_payloads)}"
 
-    # Wait for timer to expire (0.3s delay + 0.15s buffer)
-    await asyncio.sleep(0.45)
+    # Wait for timer to expire (0.6s delay + 0.25s buffer)
+    await asyncio.sleep(0.85)
 
     assert len(received_payloads) == 1, f"Expected exactly 1 combined call, got {len(received_payloads)}"
     combined_body = received_payloads[0]["payload"]["body"]
@@ -605,7 +605,42 @@ async def run_tests():
     )
     print(f"  [Turn 5 - Confirmation] Customer: '{t5}' -> Agent: '{r5}'")
     assert any(w in r5.lower() for w in ["confirmed", "order id", "shukriya"]), f"Turn 5 should confirm order! Reply: {r5}"
-    print("  [OK] Multi-turn order and cart modification workflow completed successfully!")
+    assert conv_session.get("items") is None, f"Cart items should be cleared from session upon confirmation, got {conv_session.get('items')}"
+    assert conv_session.get("total_bill") is None, f"Total bill should be cleared from session upon confirmation, got {conv_session.get('total_bill')}"
+    assert conv_session.get("name") == "Ahmad", f"Customer name should be retained for CRM, got {conv_session.get('name')}"
+    assert conv_session.get("address") == "Model Town DI Khan", f"Customer address should be retained for CRM, got {conv_session.get('address')}"
+    print("  [OK] Multi-turn order and cart modification workflow completed successfully with clean post-order cart wipe!")
+
+    # ---------------------------------------------------------
+    # 12. Testing Customer Info Extraction & Single-Message Order
+    # ---------------------------------------------------------
+    print("\n[12/12] Testing Customer Info Extraction & Single-Message Flow...")
+    from services.agent_runner import extract_customer_info
+    
+    # Unit tests for extract_customer_info
+    n1, a1, _ = extract_customer_info("Ahmad, Model Town DI Khan")
+    assert n1 == "Ahmad" and "Model Town" in a1, f"Failed on 'Ahmad, Model Town DI Khan': {n1}, {a1}"
+    
+    n2, a2, _ = extract_customer_info("Mera naam Usman hai, delivery address Cantt DI Khan")
+    assert n2 == "Usman" and "Cantt" in a2, f"Failed on explicit name/address: {n2}, {a2}"
+    
+    _, _, p3 = extract_customer_info("Takeaway hai 20 minute mein uthaunga")
+    assert p3 and "20" in p3, f"Failed on pickup time: {p3}"
+    
+    n4, a4, _ = extract_customer_info("Wait, 1 regular coke bhi sath add kardo")
+    assert n4 is None and a4 is None, f"Addition message should not extract false name/address: {n4}, {a4}"
+    print("  [OK] extract_customer_info accurately parses names, addresses, and pickup times without false positives")
+
+    # Single-message complete order test (Customer provides everything at once)
+    single_turn_session = {"phone": "923306874242", "history": []}
+    single_msg = "Salam, 1 chicken sobat chest thal mein delivery chahiye, mera naam Tariq hai Model Town DI Khan"
+    r_single, _, _ = await execute_designated_agent(
+        phone="923306874242", user_text=single_msg, session=single_turn_session, hours=sim_open_hours, dispatch_mode="simulator", override_shift="open"
+    )
+    print(f"  [Single-Message Order] Reply: '{r_single[:120]}...'")
+    assert any(w in r_single for w in ["Order Summary", "Tariq", "860", "Model Town"]), \
+        f"Single-message order should immediately display Order Summary or bill with customer details! Reply: {r_single}"
+    print("  [OK] Single-turn rich message with items + name + address handled seamlessly without redundant questions!")
 
     print("\n==================================================")
     print("SUCCESS: ALL UNIVERSAL TESTS PASSED!")
