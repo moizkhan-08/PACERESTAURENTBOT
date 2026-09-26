@@ -114,12 +114,12 @@ The bot strictly guides the customer through these 7 progressive steps (`service
    * Sobat variations: Chicken Fry Pieces (Leg/Chest), BBQ Chicken Sobat (Leg/Chest), Simple Sobat (Rs. 220), Mutton Sobat (Rs. 950), Beef Champ Sobat (Rs. 750), Desi Murgh Sobat (Rs. 800), Batair Sobat (Rs. 700), Platters (Mutton/Beef/Fish).
 3. **Step 3 — Packaging (STRICTLY & EXCLUSIVELY SOBAT):**
    * If Sobat / Paenda: *"Sobat Thal mein chahiye ya disposable mein?"*
-   * If Karahi, BBQ, Rice, Fast Food, etc.: **SKIP STEP 3 COMPLETELY.** Never ask or mention Thal.
-4. **Step 4 — Bill Calculation:** Calls `calculate_bill`. Displays items, subtotal, and any Thal deposit. Enforces minimum delivery order (Rs. 300).
+   * If Karahi, BBQ, Rice, Fast Food, etc.: **SKIP STEP 3 COMPLETELY.** Never ask or mention Thal. All other items are strictly packaged in disposable containers.
+4. **Step 4 — Bill Calculation & Intermediate Acknowledgment:** Calls `calculate_bill`. Confirms items and bill in 1-2 lines (e.g. *"• 1x Chicken Sobat Chest (Thal) — Total: Rs. 850 😊 Aapka delivery address aur naam bata dein?"*). **Strictly does NOT send the formal Order Summary box yet** to eliminate premature double-receipt spam.
 5. **Step 5 — Customer Info:**
    * Delivery: Name & delivery address. **STRICTLY DO NOT ASK FOR GALI, STREET, GHAR NUMBER, OR LANDMARK.** Just ask for delivery address. If returning customer, confirms known address.
    * Takeaway: Name & expected pickup time.
-6. **Step 6 — Receipt Confirmation:** Displays clean receipt box:
+6. **Step 6 — Official Order Summary (Sent ONCE when all details are gathered):** Displays the official clean receipt box:
    ```text
    📋 *Order Summary*
    ─────────────────
@@ -137,6 +137,7 @@ The bot strictly guides the customer through these 7 progressive steps (`service
    ─────────────────
    _Confirm karein? (Haan / Cancel)_
    ```
+   * **Order Modifications & Updates:** Customer conversation is cached for 2 hours (120 minutes) in Redis. Any mid-conversation additions, swaps, or address changes re-evaluate `calculate_bill` against the updated cart and output an updated Order Summary.
 7. **Step 7 — Dual Execution (Both Takeaway & Delivery):**
    * Customer says "Haan/Confirm" → Executes `save_order` (Supabase DB) **and** `notify_admins_and_kitchen` (WhatsApp alerts) simultaneously.
    * **Takeaway & Delivery Mandate:** Real-time alerts are sent to Kitchen, Admin, and Admin WhatsApp Group for BOTH Takeaway and Delivery orders.
@@ -203,9 +204,9 @@ All financial, state, and menu operations are strictly controlled in Python code
     * BBQ items (Chicken Tikka Piece, Malai Boti, Seekh Kabab, BBQ Chicken Sobat, BBQ Pieces) are **strictly NOT available before 6:30 PM PKT** because charcoal grills are only lit in the evening.
     * If requested before 6:30 PM, the bot explains BBQ starts at 6:30 PM and suggests daytime items (Chicken Sobat Fry Pieces, Karahi, Handi, Chinese Rice).
     * `calculate_bill()` deterministically blocks BBQ items if called before 6:30 PM.
-18. **2-Second Sliding Window Message Debouncer:**
-    * When customers send rapid fragmented WhatsApp messages (e.g. within 2 seconds of each other), the timer slides forward on each new message.
-    * Once 2 seconds of silence elapse, all buffered messages are aggregated into a single unified prompt and processed once.
+18. **2-Second Message Debouncer & Aggregator:**
+    * When customers send rapid fragmented WhatsApp messages, messages within 2 seconds of silence (and capped at 2.0s maximum ceiling from first arrival) are buffered together.
+    * After 2 seconds of silence or 2.0s total ceiling, all buffered messages are aggregated into a single unified prompt and processed once.
     * Eliminates parallel execution race conditions, session clobbering, and disjointed multiple replies.
 
 ---
@@ -262,10 +263,11 @@ python universal_test.py
 ```
 
 ### Autonomous Testing & Validation Rules:
-1. **Zero Unnecessary Permissions:** Never ask for permission for routine, safe, reversible development testing. Perform validation autonomously.
-2. **Single Reusable Test File:** Always maintain and reuse `universal_test.py` in the project root. Do not create dozens of scattered one-off test scripts.
-3. **Continuous Feedback Loop:** Follow `Modify code -> update universal_test.py -> execute -> diagnose -> fix -> re-test` until complete.
-4. **Only Involve User for Critical Actions:** Involve user only for destructive operations (deleting databases/user data), external purchases, or production deployment authorization.
+1. **Universal Python File Rule (Mandatory):** Whenever there is ANY executable task, diagnostic, data verification, bug reproduction, or testing, **always** write to and edit `universal_test.py` in the project root. Strictly **do NOT** create scattered, ad-hoc, or one-off python scripts (such as `test1.py`, `temp.py`, `check.py`, `run.py`).
+2. **Zero Unnecessary Permissions:** Never ask for permission for routine, safe, reversible development testing. Perform validation autonomously.
+3. **Single Reusable Test File:** Always maintain, update, and reuse `universal_test.py`. Retain core test scenarios and append or edit task logic in-place.
+4. **Continuous Feedback Loop:** Follow `Modify code -> update universal_test.py -> execute -> diagnose -> fix -> re-test` until complete.
+5. **Only Involve User for Critical Actions:** Involve user only for destructive operations (deleting databases/user data), external purchases, or production deployment authorization.
 
 ### Testing Via Web Simulator:
 The bot includes a web simulation endpoint to test multi-turn conversations without sending real WhatsApp messages:

@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Any, Dict, List, Optional
 from services.audio import transcribe_audio_payload
 from services.whatsapp import whatsapp
+from config import settings
 
 logger = logging.getLogger("debounce")
 
@@ -40,13 +41,13 @@ class MessageDebouncer:
     Production-grade Message Debounce & Buffer System.
     Features:
     1. Sliding Window (DEBOUNCE_SECONDS = 2.0): Resets on each new message.
-    2. Max-Wait Ceiling (MAX_WAIT_SECONDS = 5.0): Force-flushes after 5s from first arrival to prevent timer starvation.
+    2. Max-Wait Ceiling (MAX_WAIT_SECONDS = 2.0): Force-flushes after 2s from first arrival.
     3. 3-State Concurrency Machine (IDLE, BUFFERING, PROCESSING): Messages arriving while an agent is running are safely held in pending_buffer and drained sequentially.
     4. Media-Aware Aggregation: Transcribes voice notes using their specific media payload before merging.
     5. Proactive Typing Presence: Emits startTyping signal to WAHA immediately upon arrival and during debounce.
     6. Automatic Memory Eviction: Cleans up customer state when IDLE.
     """
-    def __init__(self, debounce_seconds: float = 2.0, max_wait_seconds: float = 5.0):
+    def __init__(self, debounce_seconds: float = 2.0, max_wait_seconds: float = 2.0):
         self.debounce_seconds = debounce_seconds
         self.max_wait_seconds = max_wait_seconds
         self._states: Dict[str, CustomerDebounceState] = {}
@@ -215,5 +216,8 @@ class MessageDebouncer:
         return combined_payload
 
 
-# Global debouncer singleton (2.0s sliding silence window, 5.0s max-wait ceiling)
-message_debouncer = MessageDebouncer(debounce_seconds=2.0, max_wait_seconds=5.0)
+# Global debouncer singleton (2.0s sliding silence window, 2.0s max-wait ceiling)
+message_debouncer = MessageDebouncer(
+    debounce_seconds=settings.DEBOUNCE_SECONDS,
+    max_wait_seconds=settings.MAX_WAIT_SECONDS
+)

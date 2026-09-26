@@ -98,7 +98,7 @@ AGENT_TOOLS = [
                     },
                     "thal_count": {
                         "type": "integer",
-                        "description": "Number of traditional Sobat Thals requested. STRICTLY ONLY for Sobat / Paenda orders. Must be 0 for all other dishes (Karahi, BBQ, Rice, etc.)."
+                        "description": "Number of traditional Sobat Thals requested. STRICTLY ONLY for Sobat / Paenda orders. All other dishes (Karahi, Handi, BBQ, Rice, Chinese, Fast Food, etc.) are strictly served in disposable packaging, so thal_count MUST be 0."
                     }
                 },
                 "required": ["items"]
@@ -356,11 +356,14 @@ async def _execute_agent_turn(
     time_pkt = hours.get("current_time_pkt", "")
     context_note = f"[Customer Phone: {phone}] [Time PKT: {time_pkt}] {context_status_note}"
     if session.get("name"):
-        context_note += f" [Returning Customer Name: {session['name']}]"
+        context_note += f" [Customer Name: {session['name']}]"
     if session.get("address"):
-        context_note += f" [Known Address: {session['address']}]"
+        context_note += f" [Customer Address: {session['address']}]"
     if session.get("order_type"):
         context_note += f" [Order Stage: {session['order_type']} in progress]"
+    if session.get("items"):
+        item_parts = [f"{it.get('quantity', 1)}x {it.get('name')}" for it in session['items']]
+        context_note += f" [Currently Staged Cart: {', '.join(item_parts)}]"
     if session.get("total_bill"):
         sub_str = f", Subtotal: Rs. {session['subtotal']:,.0f}" if session.get("subtotal") else ""
         thal_str = f", Thal Deposit: Rs. {session['thal_deposit']:,.0f}" if session.get("thal_deposit") else ""
@@ -910,5 +913,5 @@ async def process_message(payload: dict):
     history.append({"role": "user", "content": user_text})
     if final_reply:
         history.append({"role": "assistant", "content": final_reply})
-    session["history"] = history[-12:]
+    session["history"] = history[-24:]
     await set_session(phone, session)

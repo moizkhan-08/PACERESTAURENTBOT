@@ -6,7 +6,7 @@ from config import settings
 from services.cache import redis_client
 
 logger = logging.getLogger("session")
-SESSION_TTL = 60 * getattr(settings, "SESSION_TTL_MINUTES", 90)  # 90 min idle timeout
+SESSION_TTL = 60 * int(getattr(settings, "SESSION_TTL_MINUTES", 120))  # 2 hours (120 min) idle timeout
 
 
 async def get_session(phone: str) -> dict:
@@ -21,7 +21,7 @@ async def get_session(phone: str) -> dict:
 
 
 async def set_session(phone: str, data: dict):
-    """Saves customer session state to Redis with 90 minute TTL."""
+    """Saves customer session state to Redis with 2 hours (120 min) TTL."""
     try:
         await redis_client.set(f"session:{phone}", json.dumps(data), ex=SESSION_TTL)
     except Exception as e:

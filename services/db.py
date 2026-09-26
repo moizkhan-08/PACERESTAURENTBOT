@@ -98,7 +98,7 @@ class SupabaseDB:
             logger.warning("Error fetching customer profile: %s", e)
         return None
 
-    async def upsert_customer_profile(self, phone: str, name: str, address: str = "", last_items: str = "") -> bool:
+    async def upsert_customer_profile(self, phone: str, name: str, address: str = "", last_items: str = "", last_order_items: str = "", **kwargs) -> bool:
         """Upsert returning customer data into Supabase customers table."""
         try:
             import uuid

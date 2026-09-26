@@ -1,13 +1,14 @@
 """
-Pace Restaurant Bot - Universal Autonomous Testing & Validation Script
+Pace Restaurant Bot - Universal Autonomous Task Execution & Testing Script
 
 Usage:
   python universal_test.py
 
 Rules:
-  1. This is the SINGLE dedicated testing file for autonomous development and validation.
-  2. Do not create multiple ad-hoc test scripts. Modify and reuse this file.
-  3. Run tests autonomously without interrupting for permissions on routine debugging.
+  1. This is the SINGLE dedicated universal Python file for all tasks, diagnostics, and testing.
+  2. Whenever there is an executable task or testing, write to and edit THIS file directly.
+  3. Strictly do not create ad-hoc or scattered one-off test scripts (e.g. test1.py, temp.py).
+  4. Run tests and tasks autonomously without interrupting for permissions on routine operations.
 """
 import asyncio
 import os
@@ -45,8 +46,9 @@ from services.agent_runner import (
 from services.db import db
 from services.cache import redis_client
 from services.hours import get_hours_info
-from services.debounce import MessageDebouncer
+from services.debounce import MessageDebouncer, message_debouncer
 from routers.admin_commands import handle_admin_command
+from config import settings
 
 
 async def run_tests():
@@ -137,6 +139,31 @@ async def run_tests():
     assert "Delivery charges will apply" in calc_delivery["formatted_summary"]
     assert "Rs." not in calc_delivery["formatted_summary"].split("Delivery charges")[1].split("\n")[0]
     print(f"  [OK] Delivery Order Summary correctly mentions 'Delivery charges will apply' (no exact fee)")
+
+    # Packaging & Thal Exclusivity: Non-Sobat orders MUST NOT have Thal deposit even if thal_count > 0
+    calc_non_sobat_thal = await calculate_bill(
+        [{"name": "Chicken Boneless Handi (Half)", "quantity": 1}],
+        order_type="Takeaway",
+        thal_count=2
+    )
+    assert calc_non_sobat_thal["thal_deposit"] == 0.0, f"Expected 0.0 thal deposit for Handi, got {calc_non_sobat_thal['thal_deposit']}"
+    assert "Thal Deposit" not in calc_non_sobat_thal["formatted_summary"]
+    print("  [OK] Non-Sobat items (Handi/Karahi/Rice) strictly disallow Thal deposit (automatically disposable)")
+
+    # Sobat orders with thal_count > 0 correctly apply refundable Thal deposit
+    calc_sobat_thal = await calculate_bill(
+        [{"name": "Chicken Sobat", "quantity": 1}],
+        order_type="Takeaway",
+        thal_count=1
+    )
+    assert calc_sobat_thal["thal_deposit"] == 300.0, f"Expected 300.0 thal deposit for Sobat, got {calc_sobat_thal['thal_deposit']}"
+    assert "*Thal Deposit (1x)*" in calc_sobat_thal["formatted_summary"] and "Rs. 300" in calc_sobat_thal["formatted_summary"]
+    print("  [OK] Sobat orders correctly apply Thal deposit when Thal option is selected")
+
+    # Prompt rules: Packaging rule in prompts
+    assert "Thal ya Disposable ka option SIRF aur SIRF Sobat / Paenda ke liye hai!" in SYSTEM_BASE_INSTRUCTIONS
+    assert "STEP 3 KO MUKAMMAL SKIP KAREIN!" in OPEN_AGENT_PROMPT
+    print("  [OK] Prompts strictly instruct Thal option is ONLY for Sobat and all other items are disposable")
 
     # ---------------------------------------------------------
     # 3. Delivery Address Prompt Rules Tests
@@ -399,6 +426,12 @@ async def run_tests():
     # 9. Message Debouncer (Sliding Window, Max-Wait & Concurrency)
     # ---------------------------------------------------------
     print("\n[9/9] Testing Message Debouncer (Sliding Window, Max-Wait & Concurrency)...")
+    assert message_debouncer.debounce_seconds == 2.0, f"Expected 2.0s debounce, got {message_debouncer.debounce_seconds}"
+    assert message_debouncer.max_wait_seconds == 2.0, f"Expected 2.0s max wait, got {message_debouncer.max_wait_seconds}"
+    assert settings.DEBOUNCE_SECONDS == 2.0
+    assert settings.MAX_WAIT_SECONDS == 2.0
+    print("  [OK] Default Debouncer configured to 2.0 seconds window & 2.0 seconds max ceiling")
+
     debouncer = MessageDebouncer(debounce_seconds=0.3, max_wait_seconds=0.7)
     received_payloads = []
 
@@ -517,6 +550,62 @@ async def run_tests():
     assert any(w in lower_aft for w in ["sobat", "paenda"]) and ("6:30" in lower_aft or "afternoon" in lower_aft), \
         f"Afternoon agent should offer Sobat and defer Karahi to 6:30 PM! Reply: {reply_aft}"
     print(f"  [OK] Afternoon Karahi inquiry politely deferred with Sobat offer: \"{reply_aft[:80]}...\"")
+
+    # ---------------------------------------------------------
+    # 11. Multi-Turn Ordering Conversation & Modification Diagnostic
+    # ---------------------------------------------------------
+    print("\n[11/11] Diagnosing Full Multi-Turn Conversation & Modification Flow...")
+    from services.session import SESSION_TTL
+    assert SESSION_TTL == 7200, f"Expected 7200 seconds (2 hours) TTL, got {SESSION_TTL}"
+    assert settings.SESSION_TTL_MINUTES == 120, f"Expected 120 minutes in settings, got {settings.SESSION_TTL_MINUTES}"
+    print("  [OK] Session Cache configured for 2 hours (120 minutes / 7200 seconds)")
+
+    conv_session = {"phone": "923306874242", "history": []}
+    
+    # Turn 1: Initial greeting & order type
+    t1 = "Salam, delivery chahiye"
+    r1, _, _ = await execute_designated_agent(
+        phone="923306874242", user_text=t1, session=conv_session, hours=sim_open_hours, dispatch_mode="simulator", override_shift="open"
+    )
+    print(f"  [Turn 1] Customer: '{t1}' -> Agent: '{r1}'")
+    conv_session["history"].extend([{"role": "user", "content": t1}, {"role": "assistant", "content": r1}])
+
+    # Turn 2: Item selection & packaging
+    t2 = "1 chicken sobat chest thal mein"
+    r2, _, _ = await execute_designated_agent(
+        phone="923306874242", user_text=t2, session=conv_session, hours=sim_open_hours, dispatch_mode="simulator", override_shift="open"
+    )
+    print(f"  [Turn 2] Customer: '{t2}' -> Agent: '{r2}'")
+    assert "[aapka naam]" not in r2.lower(), f"Turn 2 should NOT contain '[aapka naam]' placeholder! Reply: {r2}"
+    conv_session["history"].extend([{"role": "user", "content": t2}, {"role": "assistant", "content": r2}])
+
+    # Turn 3: Customer provides info
+    t3 = "Ahmad, Model Town DI Khan"
+    r3, _, _ = await execute_designated_agent(
+        phone="923306874242", user_text=t3, session=conv_session, hours=sim_open_hours, dispatch_mode="simulator", override_shift="open"
+    )
+    print(f"  [Turn 3] Customer: '{t3}' -> Agent: '{r3}'")
+    assert "Order Summary" in r3 or "Total:" in r3, f"Turn 3 should display Order Summary! Reply: {r3}"
+    assert "Ahmad" in r3, f"Turn 3 should include customer name Ahmad! Reply: {r3}"
+    conv_session["history"].extend([{"role": "user", "content": t3}, {"role": "assistant", "content": r3}])
+
+    # Turn 4: Customer makes mid-order modification/addition: "1 regular coke bhi sath add kardo"
+    t4 = "Wait, 1 regular coke bhi sath add kardo"
+    r4, _, _ = await execute_designated_agent(
+        phone="923306874242", user_text=t4, session=conv_session, hours=sim_open_hours, dispatch_mode="simulator", override_shift="open"
+    )
+    print(f"  [Turn 4 - Modification] Customer: '{t4}' -> Agent: '{r4}'")
+    assert any(c in r4.lower() for c in ["coke", "910", "update", "sobat"]), f"Agent should reflect Coke addition! Reply: {r4}"
+    conv_session["history"].extend([{"role": "user", "content": t4}, {"role": "assistant", "content": r4}])
+
+    # Turn 5: Confirm updated order
+    t5 = "Haan theek hai, confirm kardo"
+    r5, _, _ = await execute_designated_agent(
+        phone="923306874242", user_text=t5, session=conv_session, hours=sim_open_hours, dispatch_mode="simulator", override_shift="open"
+    )
+    print(f"  [Turn 5 - Confirmation] Customer: '{t5}' -> Agent: '{r5}'")
+    assert any(w in r5.lower() for w in ["confirmed", "order id", "shukriya"]), f"Turn 5 should confirm order! Reply: {r5}"
+    print("  [OK] Multi-turn order and cart modification workflow completed successfully!")
 
     print("\n==================================================")
     print("SUCCESS: ALL UNIVERSAL TESTS PASSED!")

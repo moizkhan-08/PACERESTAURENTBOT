@@ -57,12 +57,16 @@ class Settings(BaseSettings):
     DASHBOARD_PORT: int = Field(default=4434)
     DEBUG: bool = Field(default=False)
     ORDER_CONFIRM_TIMEOUT_MIN: int = Field(default=10)
-    SESSION_TTL_MINUTES: int = Field(default=90, description="Customer session idle timeout in minutes (Redis)")
+    SESSION_TTL_MINUTES: int = Field(default=120, description="Customer session idle timeout in minutes (Redis - 2 hours)")
     WAHA_ENABLED: bool = Field(default=True)
 
     # ── Anti-Ban & Humanization Delays ──
     DYNAMIC_DELAY_MIN: float = Field(default=1.0, description="Minimum dynamic typing delay in seconds")
     DYNAMIC_DELAY_MAX: float = Field(default=3.0, description="Maximum dynamic typing delay in seconds")
+
+    # ── Message Debouncing ──
+    DEBOUNCE_SECONDS: float = Field(default=2.0, description="Debounce silence window in seconds")
+    MAX_WAIT_SECONDS: float = Field(default=2.0, description="Maximum wait ceiling before flushing debounce buffer in seconds")
 
     # ── Admin API Security ──
     ADMIN_API_KEY: str = Field(default="pace-admin-secret-change-me")
